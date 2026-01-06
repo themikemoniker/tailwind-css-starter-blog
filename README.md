@@ -189,6 +189,16 @@ npx degit 'timlrx/tailwind-nextjs-starter-blog'
 7. Add blog posts
 8. Deploy on Vercel
 
+## Deploying to GitHub Pages
+
+The Next.js config already supports static exports, so you can host the site on GitHub Pages without extra build tooling. This repository includes `.github/workflows/deploy-github-pages.yml`, which runs on every push to `main` (and can be triggered manually) to create an exported build and publish it with the official `actions/deploy-pages` flow.
+
+1. Make sure GitHub Pages in your repo settings is configured to use GitHub Actions as the source.
+2. Update the `NEXT_BASE_PATH` variable at the top of the workflow file if you plan to publish from a user/org site (`/`), a project site (`/<repo-name>`), or a custom domain (leave it empty and configure the domain in the Pages settings).
+3. Push to `main` (or run the workflow manually) and the action will: install dependencies with Yarn, run `EXPORT=1 UNOPTIMIZED=1 BASE_PATH=$NEXT_BASE_PATH yarn build`, add an `out/.nojekyll` marker, upload the static `out/` folder, and deploy it to Pages.
+
+If you prefer to deploy manually, run the same command locally, create `out/.nojekyll`, and push the contents of `out/` to the branch you configured for GitHub Pages.
+
 ## Installation
 
 ```bash
