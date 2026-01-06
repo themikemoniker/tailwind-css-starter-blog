@@ -1,0 +1,225 @@
+---
+title: Cheap, Flexible Hosting for Next.js with GitHub Pages, EC2 Micro, and Cloudflare Tunnel
+date: '2026-01-06'
+tags: ['nextjs', 'hosting', 'cloudflare', 'architecture']
+draft: false
+summary: Hybrid hosting blueprint that pairs GitHub Pages, EC2 micro instances, and Cloudflare Tunnel for ultra-cheap yet flexible Next.js deployments.
+---
+
+If you want to host multiple web projects cheaply while still keeping flexibility and control, a hybrid setup works extremely well:
+
+* **Static sites** on GitHub Pages
+* **1–2 real apps (SSR / APIs)** on tiny EC2 micro instances
+* **Everything else** on your own home server
+* **Cloudflare DNS + Tunnel** tying it all together
+
+This post walks through a practical, production‑proven architecture that minimizes cost, avoids RAM pain, and scales cleanly.
+
+---
+
+## Goals
+
+* Spend as little as possible on hosting
+* Avoid running heavy builds on tiny servers
+* Use subdomains for everything
+* Safely expose home services without port forwarding
+* Keep deployments boring and repeatable
+
+---
+
+## High‑Level Architecture
+
+```
+GitHub Pages  ──┐
+                │
+EC2 Micro ──────┼── Cloudflare DNS / HTTPS ── Internet
+                │
+Home Server ────┘        (Cloudflare Tunnel)
+```
+
+Each subdomain points to the *right* kind of infrastructure:
+
+| Type                     | Where it runs | Examples                      |
+| ------------------------ | ------------- | ----------------------------- |
+| Static content           | GitHub Pages  | docs, landing pages           |
+| SSR / APIs               | EC2 micro     | core app, API                 |
+| Internal / side services | Home server   | Grafana, staging, admin tools |
+
+---
+
+## Static Sites: GitHub Pages
+
+For anything that can be pre‑rendered, GitHub Pages is hard to beat:
+
+* Free
+* Global CDN
+* Zero server maintenance
+
+### DNS setup
+
+Create a subdomain per site:
+
+```
+docs.example.com        → GitHub Pages
+interviewprep.example.com → GitHub Pages
+```
+
+In Cloudflare:
+
+* Add a `CNAME` record pointing to `username.github.io`
+* Enable the proxy (orange cloud)
+
+In GitHub:
+
+* Set the custom domain in the repo’s Pages settings
+
+That’s it.
+
+---
+
+## EC2 Micro: The “Real” Apps
+
+For apps that need:
+
+* SSR
+* API routes
+* Background jobs
+
+Use **1–2 EC2 micro instances** (or similar free/cheap VPS).
+
+### Key rule: never build on the server
+
+Tiny machines hate builds.
+
+Instead:
+
+1. Build Docker images in GitHub Actions
+2. Push to a registry (GHCR works great)
+3. Pull and run on EC2
+
+Your EC2 box should only:
+
+* Run Docker
+* Serve traffic
+* Restart containers
+
+### Runtime setup
+
+* One container per app
+* Optionally a lightweight reverse proxy (Caddy / Traefik)
+* Or skip the proxy entirely and use Cloudflare Tunnel
+
+---
+
+## Home Server + Cloudflare Tunnel
+
+This is where Cloudflare Tunnel shines.
+
+It lets you expose services from your home server:
+
+* Without opening ports
+* Without public IPs
+* Without dealing with TLS
+
+### One tunnel, many services
+
+A single tunnel can route multiple hostnames:
+
+```
+grafana.example.com  → grafana:3000
+staging.example.com  → next-staging:3000
+portainer.example.com → portainer:9000
+```
+
+All traffic:
+
+* Enters Cloudflare
+* Travels outbound from your home server
+* Is encrypted end‑to‑end
+
+### Docker‑friendly
+
+Your home machine typically runs:
+
+* `cloudflared`
+* Docker Compose
+* Your apps
+
+No firewall gymnastics required.
+
+---
+
+## DNS Strategy (Simple Rules)
+
+| Destination    | DNS type                 |
+| -------------- | ------------------------ |
+| GitHub Pages   | CNAME → github.io        |
+| EC2 via Tunnel | CNAME → cfargotunnel.com |
+| Home server    | CNAME → cfargotunnel.com |
+
+Cloudflare manages certificates and HTTPS automatically.
+
+---
+
+## Deployment Flow
+
+### Static sites
+
+```
+git push → GitHub Pages deploys
+```
+
+### EC2 apps
+
+```
+git push
+  → GitHub Actions builds image
+  → push to registry
+  → EC2 pulls & restarts container
+```
+
+### Home server apps
+
+Best options:
+
+* Watchtower (automatic pulls)
+* Manual `docker compose pull`
+
+No inbound access needed.
+
+---
+
+## Security Wins
+
+This setup gives you strong defaults:
+
+* No open home ports
+* HTTPS everywhere
+* Cloudflare Access for private services
+* Service tokens for internal APIs
+
+You can lock down admin tools so they’re only reachable after authentication.
+
+---
+
+## Why This Setup Works
+
+* **Cheap**: GitHub Pages + micro instances + home hardware
+* **Stable**: no builds on low‑RAM servers
+* **Flexible**: move services between EC2 and home easily
+* **Scalable**: add VPSes or tunnels without re‑architecting
+
+Most importantly, it stays understandable even as it grows.
+
+---
+
+## Final Thoughts
+
+This hybrid approach hits a sweet spot between:
+
+* serverless convenience
+* full self‑hosting control
+
+If you like owning your stack but don’t want to pay for idle servers, this pattern is hard to beat.
+
+Happy shipping.
