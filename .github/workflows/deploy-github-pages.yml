@@ -15,9 +15,11 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
-# Update NEXT_BASE_PATH if you publish to a custom domain or user/organization site.
+# Set NEXT_BASE_PATH to '' for root domains (custom domain or user/org site). Use /<repo>
+# if you deploy under the default project path, or set a repository variable named
+# NEXT_BASE_PATH to override this value without editing the workflow.
 env:
-  NEXT_BASE_PATH: /${{ github.event.repository.name }}
+  NEXT_BASE_PATH: ${{ vars.NEXT_BASE_PATH != '' && vars.NEXT_BASE_PATH || '' }}
 
 jobs:
   build:

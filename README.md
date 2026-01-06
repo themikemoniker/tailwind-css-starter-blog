@@ -194,7 +194,9 @@ npx degit 'timlrx/tailwind-nextjs-starter-blog'
 The Next.js config already supports static exports, so you can host the site on GitHub Pages without extra build tooling. This repository includes `.github/workflows/deploy-github-pages.yml`, which runs on every push to `main` (and can be triggered manually) to create an exported build and publish it with the official `actions/deploy-pages` flow.
 
 1. Make sure GitHub Pages in your repo settings is configured to use GitHub Actions as the source.
-2. Update the `NEXT_BASE_PATH` variable at the top of the workflow file if you plan to publish from a user/org site (`/`), a project site (`/<repo-name>`), or a custom domain (leave it empty and configure the domain in the Pages settings).
+2. Set the `NEXT_BASE_PATH` env (either by editing the workflow or by creating a repository variable with that name) to match where Pages will host the site:
+   - `''` for user/org sites or custom domains mapped to the root.
+   - `/<repo-name>` for the default project path (e.g., `/tailwind-css-starter-blog`).
 3. Push to `main` (or run the workflow manually) and the action will: install dependencies with Yarn, run `EXPORT=1 UNOPTIMIZED=1 BASE_PATH=$NEXT_BASE_PATH yarn build`, add an `out/.nojekyll` marker, upload the static `out/` folder, and deploy it to Pages.
 
 If you prefer to deploy manually, run the same command locally, create `out/.nojekyll`, and push the contents of `out/` to the branch you configured for GitHub Pages.
