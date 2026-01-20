@@ -1,0 +1,22 @@
+<svg width="544" height="306" viewBox="0 0 544 306" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="544" height="306" fill="#1a1a2e"/>
+  <rect x="40" y="80" width="120" height="146" rx="8" fill="#16213e"/>
+  <circle cx="100" cy="120" r="24" fill="#4ade80"/>
+  <rect x="70" y="160" width="60" height="8" rx="4" fill="#374151"/>
+  <rect x="60" y="180" width="80" height="6" rx="3" fill="#374151"/>
+  <rect x="65" y="196" width="70" height="6" rx="3" fill="#374151"/>
+  <path d="M180 153 L220 153" stroke="#4ade80" stroke-width="3" stroke-dasharray="8 4"/>
+  <circle cx="220" cy="153" r="6" fill="#4ade80"/>
+  <rect x="240" y="100" width="100" height="106" rx="8" fill="#16213e"/>
+  <rect x="256" y="116" width="68" height="10" rx="5" fill="#f59e0b"/>
+  <rect x="256" y="136" width="68" height="6" rx="3" fill="#374151"/>
+  <rect x="256" y="150" width="50" height="6" rx="3" fill="#374151"/>
+  <rect x="256" y="170" width="68" height="20" rx="4" fill="#4ade80"/>
+  <path d="M360 153 L400 153" stroke="#f59e0b" stroke-width="3" stroke-dasharray="8 4"/>
+  <circle cx="400" cy="153" r="6" fill="#f59e0b"/>
+  <rect x="420" y="110" width="84" height="86" rx="8" fill="#16213e"/>
+  <path d="M462 135 L462 165 M447 150 L477 150" stroke="#f59e0b" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="462" cy="150" r="20" stroke="#f59e0b" stroke-width="3" fill="none"/>
+  <text x="272" y="260" font-family="system-ui, sans-serif" font-size="18" font-weight="600" fill="#e5e7eb" text-anchor="middle">Agent Payment Project</text>
+  <text x="272" y="282" font-family="system-ui, sans-serif" font-size="12" fill="#9ca3af" text-anchor="middle">CrewAI + Flask + Nostr Wallet Connect</text>
+</svg>

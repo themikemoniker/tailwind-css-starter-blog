@@ -1,0 +1,40 @@
+<svg width="544" height="306" viewBox="0 0 544 306" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="544" height="306" fill="#18181b"/>
+  <rect x="40" y="45" width="220" height="160" rx="8" fill="#27272a" stroke="#3f3f46" stroke-width="2"/>
+  <rect x="50" y="55" width="12" height="12" rx="6" fill="#ef4444"/>
+  <rect x="68" y="55" width="12" height="12" rx="6" fill="#eab308"/>
+  <rect x="86" y="55" width="12" height="12" rx="6" fill="#22c55e"/>
+  <rect x="50" y="80" width="200" height="115" rx="4" fill="#09090b"/>
+  <text x="60" y="100" font-family="monospace" font-size="11" fill="#7c3aed">const</text>
+  <text x="95" y="100" font-family="monospace" font-size="11" fill="#e5e7eb">greeting =</text>
+  <text x="170" y="100" font-family="monospace" font-size="11" fill="#22c55e">'Hello'</text>
+  <text x="60" y="118" font-family="monospace" font-size="11" fill="#7c3aed">function</text>
+  <text x="115" y="118" font-family="monospace" font-size="11" fill="#60a5fa">debounce</text>
+  <text x="175" y="118" font-family="monospace" font-size="11" fill="#fbbf24">(fn, ms)</text>
+  <text x="70" y="136" font-family="monospace" font-size="11" fill="#7c3aed">let</text>
+  <text x="95" y="136" font-family="monospace" font-size="11" fill="#e5e7eb">timer</text>
+  <text x="70" y="154" font-family="monospace" font-size="11" fill="#7c3aed">return</text>
+  <text x="115" y="154" font-family="monospace" font-size="11" fill="#fbbf24">(...args)</text>
+  <text x="175" y="154" font-family="monospace" font-size="11" fill="#7c3aed">=&gt;</text>
+  <text x="195" y="154" font-family="monospace" font-size="11" fill="#e5e7eb">{</text>
+  <text x="80" y="172" font-family="monospace" font-size="11" fill="#60a5fa">clearTimeout</text>
+  <text x="165" y="172" font-family="monospace" font-size="11" fill="#e5e7eb">(timer)</text>
+  <rect x="284" y="45" width="220" height="75" rx="8" fill="#27272a" stroke="#22c55e" stroke-width="2"/>
+  <text x="304" y="70" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#22c55e">Arrays &amp; Objects</text>
+  <rect x="304" y="82" width="60" height="6" rx="3" fill="#3f3f46"/>
+  <rect x="304" y="94" width="80" height="6" rx="3" fill="#3f3f46"/>
+  <rect x="304" y="106" width="50" height="6" rx="3" fill="#3f3f46"/>
+  <rect x="284" y="130" width="220" height="75" rx="8" fill="#27272a" stroke="#60a5fa" stroke-width="2"/>
+  <text x="304" y="155" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#60a5fa">DOM Manipulation</text>
+  <rect x="304" y="167" width="70" height="6" rx="3" fill="#3f3f46"/>
+  <rect x="304" y="179" width="55" height="6" rx="3" fill="#3f3f46"/>
+  <rect x="304" y="191" width="85" height="6" rx="3" fill="#3f3f46"/>
+  <rect x="40" y="215" width="140" height="40" rx="8" fill="#27272a" stroke="#f59e0b" stroke-width="2"/>
+  <text x="60" y="240" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#f59e0b">Async Patterns</text>
+  <rect x="192" y="215" width="140" height="40" rx="8" fill="#27272a" stroke="#ec4899" stroke-width="2"/>
+  <text x="212" y="240" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#ec4899">React Hooks</text>
+  <rect x="344" y="215" width="160" height="40" rx="8" fill="#27272a" stroke="#06b6d4" stroke-width="2"/>
+  <text x="364" y="240" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#06b6d4">CSS Challenges</text>
+  <text x="272" y="280" font-family="system-ui, sans-serif" font-size="18" font-weight="600" fill="#e5e7eb" text-anchor="middle">FrontEndGarden</text>
+  <text x="272" y="298" font-family="system-ui, sans-serif" font-size="12" fill="#9ca3af" text-anchor="middle">TypeScript Interview Prep</text>
+</svg>
