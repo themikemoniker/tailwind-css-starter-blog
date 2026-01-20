@@ -1,0 +1,33 @@
+<svg width="544" height="306" viewBox="0 0 544 306" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="544" height="306" fill="#0f172a"/>
+  <rect x="30" y="50" width="484" height="200" rx="12" fill="#1e293b" stroke="#334155" stroke-width="2"/>
+  <rect x="50" y="70" width="200" height="100" rx="8" fill="#0f172a"/>
+  <polyline points="70,140 100,120 130,130 160,90 190,100 220,80" stroke="#f7931a" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="70" cy="140" r="4" fill="#f7931a"/>
+  <circle cx="100" cy="120" r="4" fill="#f7931a"/>
+  <circle cx="130" cy="130" r="4" fill="#f7931a"/>
+  <circle cx="160" cy="90" r="4" fill="#f7931a"/>
+  <circle cx="190" cy="100" r="4" fill="#f7931a"/>
+  <circle cx="220" cy="80" r="4" fill="#f7931a"/>
+  <rect x="270" y="70" width="110" height="40" rx="6" fill="#0f172a"/>
+  <text x="285" y="86" font-family="system-ui, sans-serif" font-size="10" fill="#64748b">Hashrate</text>
+  <text x="285" y="102" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#4ade80">580 EH/s</text>
+  <rect x="395" y="70" width="110" height="40" rx="6" fill="#0f172a"/>
+  <text x="410" y="86" font-family="system-ui, sans-serif" font-size="10" fill="#64748b">Difficulty</text>
+  <text x="410" y="102" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#f7931a">84.38 T</text>
+  <rect x="270" y="120" width="110" height="40" rx="6" fill="#0f172a"/>
+  <text x="285" y="136" font-family="system-ui, sans-serif" font-size="10" fill="#64748b">BTC Price</text>
+  <text x="285" y="152" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#4ade80">$104,250</text>
+  <rect x="395" y="120" width="110" height="40" rx="6" fill="#0f172a"/>
+  <text x="410" y="136" font-family="system-ui, sans-serif" font-size="10" fill="#64748b">Hash Price</text>
+  <text x="410" y="152" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#818cf8">$48.2/PH</text>
+  <rect x="50" y="180" width="454" height="50" rx="6" fill="#0f172a"/>
+  <rect x="70" y="200" width="60" height="16" rx="4" fill="#4ade80" opacity="0.8"/>
+  <rect x="140" y="200" width="80" height="16" rx="4" fill="#f7931a" opacity="0.8"/>
+  <rect x="230" y="200" width="50" height="16" rx="4" fill="#818cf8" opacity="0.8"/>
+  <rect x="290" y="200" width="70" height="16" rx="4" fill="#f43f5e" opacity="0.8"/>
+  <rect x="370" y="200" width="55" height="16" rx="4" fill="#06b6d4" opacity="0.8"/>
+  <rect x="435" y="200" width="50" height="16" rx="4" fill="#a3e635" opacity="0.8"/>
+  <text x="272" y="274" font-family="system-ui, sans-serif" font-size="18" font-weight="600" fill="#e5e7eb" text-anchor="middle">Bitcoin Mining Dashboard</text>
+  <text x="272" y="294" font-family="system-ui, sans-serif" font-size="12" fill="#9ca3af" text-anchor="middle">Elixir + Phoenix LiveView</text>
+</svg>
