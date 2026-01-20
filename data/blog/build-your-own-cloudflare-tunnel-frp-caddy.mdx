@@ -1,0 +1,743 @@
+---
+title: How to Build Your Own Cloudflare Tunnel with frp and Caddy
+date: '2026-01-20'
+tags: ['selfhosted', 'infrastructure', 'guide', 'networking', 'linux']
+draft: false
+summary: A complete guide to exposing your home server to the internet without opening any inbound ports using frp (Fast Reverse Proxy) and Caddy - a fully FOSS alternative to Cloudflare Tunnel.
+---
+
+# How to Build Your Own Cloudflare Tunnel with frp and Caddy
+
+*A complete guide to exposing your home server to the internet without opening any inbound ports*
+
+## Why This Matters
+
+If you're running services on a home server (a Next.js app, a personal API, a self-hosted tool), you've probably hit one of these problems:
+
+- Your ISP uses CGNAT (Carrier-Grade NAT) and you don't have a public IP
+- You don't want to expose your home IP address to the internet
+- Opening ports on your router feels risky
+- You want DDoS protection but don't want to rely on Cloudflare
+
+This guide shows you how to build a FOSS alternative to Cloudflare Tunnel using **frp** (Fast Reverse Proxy) and **Caddy**. Your home server will only make outbound connections—no inbound ports required.
+
+## What You'll Build
+
+```
+Internet → VPS (Caddy + frp server) → Tunnel → Home Server (frp client)
+```
+
+**Architecture highlights:**
+- Home server initiates an outbound connection to your VPS
+- VPS handles SSL, DNS, and public traffic
+- Traffic flows through the tunnel back to your home server
+- Zero inbound ports on your home network
+
+## Prerequisites
+
+**What you need:**
+- A domain name (any registrar works)
+- A VPS with a public IP (~$5/month - I recommend Hetzner, DigitalOcean, or Vultr)
+- A home server running Linux (Ubuntu, Debian, or similar)
+- Basic command-line familiarity
+
+**What you'll install:**
+- **frp** - handles the reverse tunnel
+- **Caddy** - web server with automatic SSL
+- **UFW** - firewall (optional but recommended)
+
+## Part 1: VPS Setup
+
+All commands in this section run on your **VPS**.
+
+### Step 1: Initial VPS Hardening
+
+First, let's secure your VPS with basic hardening.
+
+```bash
+# Update system packages
+sudo apt update && sudo apt upgrade -y
+
+# Install essential tools
+sudo apt install -y curl wget ufw fail2ban
+```
+
+### Step 2: Configure Firewall
+
+```bash
+# Set default policies
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+# Allow SSH (important - do this first!)
+sudo ufw allow 22/tcp
+
+# Allow HTTP and HTTPS for Caddy
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+
+# Allow frp control port
+sudo ufw allow 7000/tcp
+
+# Enable firewall
+sudo ufw enable
+
+# Verify status
+sudo ufw status verbose
+```
+
+**Expected output:**
+```
+Status: active
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     ALLOW       Anywhere
+80/tcp                     ALLOW       Anywhere
+443/tcp                    ALLOW       Anywhere
+7000/tcp                   ALLOW       Anywhere
+```
+
+### Step 3: Install Caddy
+
+```bash
+# Install Caddy using official script
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install -y caddy
+
+# Verify installation
+caddy version
+```
+
+### Step 4: Install frp Server
+
+```bash
+# Download latest frp release (check https://github.com/fatedier/frp/releases for newest version)
+cd /tmp
+wget https://github.com/fatedier/frp/releases/download/v0.52.0/frp_0.52.0_linux_amd64.tar.gz
+
+# Extract
+tar -xzf frp_0.52.0_linux_amd64.tar.gz
+cd frp_0.52.0_linux_amd64
+
+# Move server binary to /usr/local/bin
+sudo mv frps /usr/local/bin/
+sudo chmod +x /usr/local/bin/frps
+
+# Create config directory
+sudo mkdir -p /etc/frp
+
+# Verify installation
+frps --version
+```
+
+### Step 5: Configure frp Server
+
+Create the frp server configuration file:
+
+```bash
+sudo nano /etc/frp/frps.ini
+```
+
+Add this configuration:
+
+```ini
+[common]
+bind_port = 7000
+vhost_http_port = 8080
+
+# Optional: Add authentication for security
+authentication_method = token
+token = YOUR_SECURE_TOKEN_HERE_CHANGE_THIS
+```
+
+**Important:** Change `YOUR_SECURE_TOKEN_HERE_CHANGE_THIS` to a strong random token. Generate one with:
+
+```bash
+openssl rand -base64 32
+```
+
+### Step 6: Create frp Systemd Service
+
+Create a systemd service so frp starts automatically:
+
+```bash
+sudo nano /etc/systemd/system/frps.service
+```
+
+Add this content:
+
+```ini
+[Unit]
+Description=frp server
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Restart=on-failure
+RestartSec=5s
+ExecStart=/usr/local/bin/frps -c /etc/frp/frps.ini
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start the service:
+
+```bash
+# Reload systemd
+sudo systemctl daemon-reload
+
+# Enable frp to start on boot
+sudo systemctl enable frps
+
+# Start frp now
+sudo systemctl start frps
+
+# Check status
+sudo systemctl status frps
+```
+
+**Expected output:**
+```
+● frps.service - frp server
+     Loaded: loaded (/etc/systemd/system/frps.service; enabled)
+     Active: active (running) since ...
+```
+
+### Step 7: Configure Caddy
+
+First, point your domain's DNS to your VPS IP address:
+
+**In your DNS provider (Cloudflare, Namecheap, etc.):**
+- Create an A record: `myapp.yourdomain.com` → `YOUR_VPS_IP`
+- Wait a few minutes for DNS propagation
+
+Now configure Caddy:
+
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
+
+Replace the contents with:
+
+```
+myapp.yourdomain.com {
+    reverse_proxy localhost:8080
+}
+```
+
+**Replace `myapp.yourdomain.com` with your actual domain.**
+
+Restart Caddy:
+
+```bash
+sudo systemctl restart caddy
+
+# Check status
+sudo systemctl status caddy
+
+# View logs if needed
+sudo journalctl -u caddy -f
+```
+
+Caddy will automatically obtain an SSL certificate from Let's Encrypt for your domain.
+
+**VPS setup complete!**
+
+---
+
+## Part 2: Home Server Setup
+
+All commands in this section run on your **home server**.
+
+### Step 1: Install frp Client
+
+```bash
+# Download same frp version as VPS
+cd /tmp
+wget https://github.com/fatedier/frp/releases/download/v0.52.0/frp_0.52.0_linux_amd64.tar.gz
+
+# Extract
+tar -xzf frp_0.52.0_linux_amd64.tar.gz
+cd frp_0.52.0_linux_amd64
+
+# Move client binary to /usr/local/bin
+sudo mv frpc /usr/local/bin/
+sudo chmod +x /usr/local/bin/frpc
+
+# Create config directory
+sudo mkdir -p /etc/frp
+
+# Verify installation
+frpc --version
+```
+
+### Step 2: Configure frp Client
+
+Create the client configuration:
+
+```bash
+sudo nano /etc/frp/frpc.ini
+```
+
+Add this configuration:
+
+```ini
+[common]
+server_addr = YOUR_VPS_IP_ADDRESS
+server_port = 7000
+
+# Must match the token from VPS frps.ini
+authentication_method = token
+token = YOUR_SECURE_TOKEN_HERE_CHANGE_THIS
+
+[web]
+type = http
+local_ip = 127.0.0.1
+local_port = 3000
+custom_domains = myapp.yourdomain.com
+```
+
+**Important replacements:**
+- `YOUR_VPS_IP_ADDRESS` - your VPS's public IP
+- `YOUR_SECURE_TOKEN_HERE_CHANGE_THIS` - the same token from your VPS config
+- `myapp.yourdomain.com` - your actual domain
+- `local_port = 3000` - the port your app runs on (change if different)
+
+### Step 3: Create frp Client Systemd Service
+
+```bash
+sudo nano /etc/systemd/system/frpc.service
+```
+
+Add this content:
+
+```ini
+[Unit]
+Description=frp client
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Restart=on-failure
+RestartSec=5s
+ExecStart=/usr/local/bin/frpc -c /etc/frp/frpc.ini
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start the service:
+
+```bash
+# Reload systemd
+sudo systemctl daemon-reload
+
+# Enable frpc to start on boot
+sudo systemctl enable frpc
+
+# Start frpc now
+sudo systemctl start frpc
+
+# Check status
+sudo systemctl status frpc
+```
+
+**Expected output:**
+```
+● frpc.service - frp client
+     Loaded: loaded (/etc/systemd/system/frpc.service; enabled)
+     Active: active (running) since ...
+```
+
+### Step 4: Start Your Application
+
+Make sure your application is running on the port you configured (default: 3000).
+
+For a Next.js app:
+
+```bash
+# Development
+npm run dev
+
+# Or production
+npm run build
+npm start
+```
+
+**Home server setup complete!**
+
+---
+
+## Part 3: Testing & Verification
+
+### Test the Connection
+
+1. **Check frp server logs on VPS:**
+
+```bash
+# On VPS
+sudo journalctl -u frps -f
+```
+
+You should see a message like: `new proxy connection from [home-server-ip]`
+
+2. **Check frp client logs on home server:**
+
+```bash
+# On home server
+sudo journalctl -u frpc -f
+```
+
+You should see: `login to server success`
+
+3. **Visit your domain:**
+
+Open `https://myapp.yourdomain.com` in your browser.
+
+You should see your home server application, served with a valid SSL certificate!
+
+### Troubleshooting
+
+**Connection refused errors:**
+
+```bash
+# On VPS - check if frps is listening
+sudo ss -tlnp | grep 7000
+sudo ss -tlnp | grep 8080
+
+# On home server - check if your app is running
+curl http://localhost:3000
+```
+
+**DNS not resolving:**
+
+```bash
+# Check DNS propagation
+dig myapp.yourdomain.com
+
+# Should show your VPS IP
+```
+
+**SSL certificate errors:**
+
+```bash
+# On VPS - check Caddy logs
+sudo journalctl -u caddy -n 50
+```
+
+Caddy might need a few minutes to obtain the certificate on first run.
+
+**Authentication failures:**
+
+Make sure the `token` in `/etc/frp/frps.ini` (VPS) exactly matches `/etc/frp/frpc.ini` (home server).
+
+---
+
+## Part 4: Advanced Configuration
+
+### Exposing Multiple Services
+
+You can expose multiple services by adding more sections to your frpc.ini:
+
+**On home server (`/etc/frp/frpc.ini`):**
+
+```ini
+[common]
+server_addr = YOUR_VPS_IP
+server_port = 7000
+authentication_method = token
+token = YOUR_TOKEN
+
+[web]
+type = http
+local_ip = 127.0.0.1
+local_port = 3000
+custom_domains = myapp.yourdomain.com
+
+[api]
+type = http
+local_ip = 127.0.0.1
+local_port = 4000
+custom_domains = api.yourdomain.com
+
+[dashboard]
+type = http
+local_ip = 127.0.0.1
+local_port = 5000
+custom_domains = dashboard.yourdomain.com
+```
+
+**On VPS (update `/etc/caddy/Caddyfile`):**
+
+```
+myapp.yourdomain.com {
+    reverse_proxy localhost:8080
+}
+
+api.yourdomain.com {
+    reverse_proxy localhost:8080
+}
+
+dashboard.yourdomain.com {
+    reverse_proxy localhost:8080
+}
+```
+
+Remember to add DNS A records for each subdomain pointing to your VPS IP.
+
+Restart services:
+
+```bash
+# On home server
+sudo systemctl restart frpc
+
+# On VPS
+sudo systemctl restart caddy
+```
+
+### Exposing TCP Services (Not HTTP)
+
+For non-HTTP services like SSH, databases, or custom protocols:
+
+**On home server (`/etc/frp/frpc.ini`):**
+
+```ini
+[ssh]
+type = tcp
+local_ip = 127.0.0.1
+local_port = 22
+remote_port = 6000
+```
+
+**On VPS:**
+
+```bash
+# Allow the port through firewall
+sudo ufw allow 6000/tcp
+```
+
+Update `/etc/frp/frps.ini` to allow TCP:
+
+```ini
+[common]
+bind_port = 7000
+vhost_http_port = 8080
+
+# Add this:
+allow_ports = 6000-6100
+```
+
+Now you can SSH to your home server via:
+
+```bash
+ssh -p 6000 user@your-vps-ip
+```
+
+### Monitoring and Logs
+
+**View live logs:**
+
+```bash
+# On VPS
+sudo journalctl -u frps -f
+sudo journalctl -u caddy -f
+
+# On home server
+sudo journalctl -u frpc -f
+```
+
+**Check service status:**
+
+```bash
+# On VPS
+sudo systemctl status frps
+sudo systemctl status caddy
+
+# On home server
+sudo systemctl status frpc
+```
+
+---
+
+## Security Considerations
+
+### 1. Keep Your Token Secret
+
+The `token` in your frp config is the only authentication preventing others from using your tunnel. Treat it like a password:
+
+- Never commit it to git
+- Use a strong random value (32+ characters)
+- Rotate it periodically
+
+### 2. Additional VPS Hardening
+
+**Disable password authentication for SSH:**
+
+```bash
+# On VPS
+sudo nano /etc/ssh/sshd_config
+```
+
+Set these values:
+
+```
+PasswordAuthentication no
+PermitRootLogin no
+```
+
+Restart SSH:
+
+```bash
+sudo systemctl restart sshd
+```
+
+**Set up Fail2ban:**
+
+```bash
+# On VPS
+sudo apt install -y fail2ban
+sudo systemctl enable fail2ban
+sudo systemctl start fail2ban
+```
+
+### 3. Enable Automatic Updates
+
+```bash
+# On VPS
+sudo apt install -y unattended-upgrades
+sudo dpkg-reconfigure -plow unattended-upgrades
+```
+
+### 4. Monitor Resource Usage
+
+Keep an eye on your VPS resources:
+
+```bash
+# On VPS
+htop
+
+# Or check memory/CPU
+free -h
+df -h
+```
+
+---
+
+## Cost Breakdown
+
+**Monthly costs:**
+- Domain: ~$1-2/month (or ~$12/year)
+- VPS: $3-6/month depending on provider
+- **Total: ~$5-8/month**
+
+**Recommended VPS providers:**
+- Hetzner Cloud: €4.15/month (CX11)
+- DigitalOcean: $6/month (Basic Droplet)
+- Vultr: $5/month (Regular Performance)
+- Linode: $5/month (Nanode)
+
+All of these provide more than enough resources for personal projects.
+
+---
+
+## Comparison with Cloudflare Tunnel
+
+| Feature | frp + Caddy | Cloudflare Tunnel |
+|---------|-------------|-------------------|
+| **Cost** | ~$5/month | Free |
+| **Setup complexity** | Medium | Easy |
+| **Privacy** | You control everything | Cloudflare sees all traffic |
+| **DDoS protection** | Basic (VPS level) | Enterprise-grade |
+| **SSL certificates** | Automatic (Caddy) | Automatic |
+| **Open source** | Yes | Client only |
+| **Vendor lock-in** | None | Cloudflare |
+| **Customization** | Full control | Limited |
+
+**When to use frp + Caddy:**
+- You want full control and privacy
+- You're comfortable managing a VPS
+- You prefer FOSS solutions
+- You want to learn more about networking
+
+**When to use Cloudflare Tunnel:**
+- You need enterprise DDoS protection
+- You want zero management overhead
+- Budget is tight (it's free)
+- You trust Cloudflare with your data
+
+---
+
+## Conclusion
+
+You now have a fully self-hosted reverse tunnel that:
+- Requires zero inbound ports on your home network
+- Provides automatic SSL certificates
+- Gives you full control over your infrastructure
+- Uses entirely open-source software
+- Costs only ~$5/month
+
+This setup works great for:
+- Personal web apps and APIs
+- Self-hosted services (Nextcloud, Home Assistant, etc.)
+- Development environments you want to share
+- Learning about reverse proxies and tunneling
+
+The best part? You understand exactly how it works and can customize it however you want.
+
+---
+
+## Quick Reference
+
+### Essential Commands
+
+**On VPS:**
+```bash
+# Restart frp server
+sudo systemctl restart frps
+
+# Restart Caddy
+sudo systemctl restart caddy
+
+# View logs
+sudo journalctl -u frps -f
+sudo journalctl -u caddy -f
+```
+
+**On home server:**
+```bash
+# Restart frp client
+sudo systemctl restart frpc
+
+# View logs
+sudo journalctl -u frpc -f
+```
+
+### Configuration Files
+
+**VPS:**
+- frp config: `/etc/frp/frps.ini`
+- Caddy config: `/etc/caddy/Caddyfile`
+
+**Home server:**
+- frp config: `/etc/frp/frpc.ini`
+
+---
+
+## Resources
+
+- [frp GitHub Repository](https://github.com/fatedier/frp)
+- [Caddy Documentation](https://caddyserver.com/docs/)
+- [UFW Guide](https://help.ubuntu.com/community/UFW)
+
+---
+
+**Questions or improvements?** Feel free to share your experience or suggestions!
+
+*Last updated: January 2026*
