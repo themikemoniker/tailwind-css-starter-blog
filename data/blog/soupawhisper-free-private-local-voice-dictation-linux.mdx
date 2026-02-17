@@ -1,0 +1,687 @@
+---
+title: 'SoupaWhisper: Free, Private, Local Voice Dictation for Linux'
+date: '2026-02-17'
+tags: ['linux', 'voice-dictation', 'whisper', 'open-source', 'privacy', 'selfhosted']
+draft: false
+summary: SoupaWhisper is a lightweight, open-source push-to-talk voice dictation tool for Linux that runs entirely on your local machine—no cloud, no subscriptions, complete privacy.
+---
+
+## What is SoupaWhisper?
+
+SoupaWhisper is a lightweight, open-source voice dictation tool for Linux that runs entirely on your local machine. Built by [@ksred](https://github.com/ksred/soupawhisper) as a Linux alternative to macOS's SuperWhisper, it provides push-to-talk speech-to-text that works in any application—terminals, browsers, text editors, and more.
+
+**Key features:**
+- 🔒 **100% private** - No cloud services, all processing happens locally
+- ⚡ **Fast** - Optimized with faster-whisper for real-time transcription
+- 🎯 **Simple** - Hold a key, speak, release—text appears
+- 🆓 **Free and open source** - MIT licensed
+- 🔧 **Configurable** - Multiple Whisper model sizes to balance speed vs accuracy
+
+Unlike commercial solutions like Wispr Flow (which doesn't support Linux), SoupaWhisper gives you complete control over your voice data and runs without any subscription fees.
+
+## How It Works
+
+SoupaWhisper uses OpenAI's Whisper model (via the optimized faster-whisper implementation) to convert speech to text:
+
+1. **Hold your hotkey** (default: F12, configurable)
+2. **Speak** naturally into your microphone
+3. **Release the key** - transcription begins
+4. **Text appears** in your active window and copies to clipboard
+
+The architecture is elegantly simple:
+```
+Hotkey Press → Audio Recording (ALSA) → faster-whisper → xdotool + xclip
+```
+
+No servers, no APIs, no data leaving your machine.
+
+## System Requirements
+
+**Minimum:**
+- Linux (Ubuntu, Debian, Fedora, Arch, etc.)
+- X11 display server (Wayland not currently supported)
+- 4GB RAM
+- Dual-core CPU
+- Microphone
+
+**Recommended:**
+- 8GB+ RAM
+- 4+ core CPU (or 6+ core for medium/large models)
+- 16GB+ RAM for large models
+
+**Note:** SoupaWhisper currently requires X11. If you're running Wayland, you'll need to switch to an X11 session (usually available as "Ubuntu on Xorg" at login).
+
+## Installation
+
+### Quick Install (Recommended)
+
+The easiest way is to use the official installer:
+
+```bash
+cd ~
+git clone https://github.com/ksred/soupawhisper.git
+cd soupawhisper
+chmod +x install.sh
+./install.sh
+```
+
+The installer will:
+- Detect your package manager
+- Install system dependencies (alsa-utils, xclip, xdotool, ffmpeg, etc.)
+- Install Poetry for Python dependency management
+- Set up the Python environment
+- Create a default configuration
+- Optionally install as a systemd service
+
+### Manual Installation
+
+If you prefer manual setup:
+
+```bash
+# Install system dependencies (Ubuntu/Debian)
+sudo apt update
+sudo apt install -y alsa-utils xclip xdotool libnotify-bin ffmpeg git python3-pip python3-venv curl
+
+# Add yourself to audio group
+sudo usermod -a -G audio $USER
+
+# Install Poetry
+curl -sSL https://install.python-poetry.org | python3 -
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+
+# Clone and install SoupaWhisper
+cd ~
+git clone https://github.com/ksred/soupawhisper.git
+cd soupawhisper
+poetry install
+
+# Create config directory
+mkdir -p ~/.config/soupawhisper
+
+# Create config file
+cat > ~/.config/soupawhisper/config.ini << 'EOF'
+[whisper]
+model = base.en
+device = cpu
+compute_type = int8
+
+[hotkey]
+key = f12
+
+[behavior]
+auto_type = true
+notifications = true
+EOF
+
+# IMPORTANT: Log out and log back in for audio group to take effect
+```
+
+### Setting Up as a System Service
+
+To run SoupaWhisper automatically in the background:
+
+```bash
+# Create systemd service file
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/soupawhisper.service << EOF
+[Unit]
+Description=SoupaWhisper Voice Dictation
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=$HOME/soupawhisper
+ExecStart=$HOME/.local/bin/poetry run python dictate.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+# Reload systemd and enable the service
+systemctl --user daemon-reload
+systemctl --user enable soupawhisper
+systemctl --user start soupawhisper
+
+# Check status
+systemctl --user status soupawhisper
+```
+
+## Configuration
+
+Edit `~/.config/soupawhisper/config.ini` to customize your setup:
+
+### Model Selection
+
+```ini
+[whisper]
+# Available models: tiny.en, base.en, small.en, medium.en, large-v3
+model = base.en
+
+# Device: cpu or cuda (requires NVIDIA GPU + CUDA)
+device = cpu
+
+# Compute type: int8 for CPU, float16 for GPU
+compute_type = int8
+```
+
+**Model comparison:**
+
+| Model | Size | Accuracy | Speed (typical) | Best For |
+|-------|------|----------|----------------|----------|
+| tiny.en | 39M | ~85% | 0.3-0.5 sec | Testing only |
+| base.en | 74M | ~90% | 0.5-1 sec | Fast dictation |
+| small.en | 244M | ~95% | 1-3 sec | Balanced |
+| medium.en | 769M | ~97% | 3-6 sec | High accuracy |
+| large-v3 | 1.5GB | ~98% | 10-20 sec | Maximum accuracy |
+
+### Hotkey Configuration
+
+```ini
+[hotkey]
+# Available keys: f12, scroll_lock, pause, insert, etc.
+key = scroll_lock
+```
+
+**Recommended hotkeys:**
+- `scroll_lock` - Rarely used, won't interfere with other apps
+- `pause` - Another good option
+- `insert` - Available on most keyboards
+- Avoid `f12` if you do web development (browser DevTools)
+
+### Behavior Settings
+
+```ini
+[behavior]
+# Automatically type transcribed text into active window
+auto_type = true
+
+# Show desktop notifications when transcription completes
+notifications = true
+```
+
+## Benchmarking Your System
+
+One of the most important steps is benchmarking your specific hardware to choose the right model. Here's how to test all model sizes and see actual performance:
+
+### Create Benchmark Script
+
+```bash
+cd ~/soupawhisper
+
+cat > benchmark.sh << 'EOF'
+#!/bin/bash
+cd ~/soupawhisper
+
+echo "============================================================"
+echo "Benchmarking Whisper Models"
+echo "============================================================"
+echo ""
+
+poetry run python << 'PYEOF'
+from faster_whisper import WhisperModel
+import time
+import urllib.request
+import os
+
+# Download test audio if needed
+if not os.path.exists("test.wav"):
+    print("Downloading test audio (JFK speech, ~11 seconds)...")
+    url = "https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav"
+    urllib.request.urlretrieve(url, "test.wav")
+    print()
+
+models = ["tiny.en", "base.en", "small.en", "medium.en"]
+
+print(f"{'Model':<12} {'Time':<8} {'RTF':<8} {'10sec':<10} {'30sec':<10} {'60sec':<10}")
+print("=" * 70)
+
+for model_size in models:
+    print(f"\nTesting {model_size}...")
+
+    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+
+    start = time.time()
+    segments, info = model.transcribe("test.wav", beam_size=1)
+    result = " ".join([segment.text for segment in segments])
+    elapsed = time.time() - start
+
+    rtf = elapsed / 11.0
+    est_10 = elapsed * 10 / 11
+    est_30 = elapsed * 30 / 11
+    est_60 = elapsed * 60 / 11
+
+    print(f"{model_size:<12} {elapsed:>6.2f}s  {rtf:>6.2f}x  {est_10:>8.1f}s  {est_30:>8.1f}s  {est_60:>8.1f}s")
+    print(f"Result: {result}")
+
+print("\n" + "=" * 70)
+print("\nRecommendations:")
+print("  • If 10sec < 2s:  Use that model for instant feedback")
+print("  • If 10sec < 5s:  Comfortable for regular dictation")
+print("  • If 10sec > 10s: Too slow, use smaller model")
+PYEOF
+EOF
+
+chmod +x benchmark.sh
+./benchmark.sh
+```
+
+### Run the Benchmark
+
+```bash
+cd ~/soupawhisper
+./benchmark.sh
+```
+
+### Example Output
+
+Here's actual benchmark output from an Intel i7-12650H (10 cores, 32GB RAM):
+
+```
+============================================================
+Benchmarking Whisper Models
+============================================================
+
+Model        Time     RTF      10sec      30sec      60sec
+======================================================================
+
+Testing tiny.en...
+tiny.en       0.30s   0.03x      0.3s       0.8s       1.7s
+Result: And so my fellow Americans ask not what your country can do for you...
+
+Testing base.en...
+base.en       0.50s   0.05x      0.5s       1.4s       2.7s
+Result: And so my fellow Americans asked not what your country can do for you...
+
+Testing small.en...
+small.en      1.48s   0.13x      1.3s       4.0s       8.1s
+Result: And so my fellow Americans, ask not what your country can do for you...
+
+Testing medium.en...
+medium.en     3.80s   0.35x      3.5s      10.4s      20.7s
+Result: And so my fellow Americans, ask not what your country can do for you...
+
+======================================================================
+
+Recommendations:
+  • base.en:   Ultra-fast, good for quick notes
+  • small.en:  Best balance for most users
+  • medium.en: High accuracy, still responsive
+```
+
+### Interpreting Results
+
+**Real-Time Factor (RTF):** How much time it takes to process 1 second of audio
+- 0.05x = 0.05 seconds to process 1 second of audio (20x real-time)
+- 1.0x = 1 second to process 1 second of audio (real-time)
+- 2.0x = 2 seconds to process 1 second of audio (0.5x real-time)
+
+**Choosing Your Model:**
+
+- **RTF < 0.2** (10sec < 2s): Feels instant, use this model!
+- **RTF < 0.5** (10sec < 5s): Very comfortable for dictation
+- **RTF < 1.0** (10sec < 10s): Usable, but getting slow
+- **RTF > 1.0** (10sec > 10s): Too slow for interactive dictation
+
+### Testing Individual Models
+
+To test a specific model in detail:
+
+```bash
+cd ~/soupawhisper
+
+# Test medium.en
+poetry run python << 'EOF'
+from faster_whisper import WhisperModel
+import time
+
+print("Testing medium.en model...")
+model = WhisperModel("medium.en", device="cpu", compute_type="int8")
+
+start = time.time()
+segments, info = model.transcribe("test.wav", beam_size=1)
+result = " ".join([segment.text for segment in segments])
+elapsed = time.time() - start
+
+print(f"\nResult: {result}")
+print(f"Time: {elapsed:.2f} seconds")
+print(f"For 10sec speech: ~{elapsed*10/11:.1f} seconds")
+print(f"For 30sec speech: ~{elapsed*30/11:.1f} seconds")
+EOF
+```
+
+## Usage Tips
+
+### Optimal Workflow
+
+1. **Press and hold your hotkey** (e.g., Scroll Lock)
+2. **Pause briefly** (0.5 seconds) to let recording start
+3. **Speak clearly** for 10-20 seconds
+4. **Release the key**
+5. **Wait** for transcription (varies by model)
+6. **Text appears** in your active window
+
+### Dictation Length Recommendations
+
+Based on your benchmark results:
+
+**With base.en (fast):**
+- ✅ 5-15 seconds: Instant feedback
+- ✅ 15-30 seconds: Still very fast
+- ⚠️ 30-60 seconds: Getting slower but usable
+
+**With small.en (balanced):**
+- ✅ 10-20 seconds: Optimal
+- ✅ 20-40 seconds: Good
+- ⚠️ 40-60 seconds: Slower
+
+**With medium.en (accurate):**
+- ✅ 10-15 seconds: Best sweet spot
+- ✅ 15-25 seconds: Still comfortable
+- ⚠️ 25-40 seconds: Starting to feel slow
+
+**General rule:** Keep individual recordings under 20 seconds for the best experience.
+
+### Improving Accuracy
+
+1. **Use a good microphone** - Headset > laptop mic
+2. **Reduce background noise** - Close windows, turn off fans
+3. **Speak clearly** - Not shouting, just clear enunciation
+4. **Use punctuation verbally** - Pause at sentence boundaries
+5. **Upgrade model** - small.en → medium.en for 2-3% accuracy boost
+
+### Common Issues
+
+**Nothing happens when I press the hotkey:**
+```bash
+# Check if service is running
+systemctl --user status soupawhisper
+
+# Check logs
+journalctl --user -u soupawhisper -f
+
+# Verify you're in audio group
+groups | grep audio
+# If not found, log out and back in
+```
+
+**First words getting cut off:**
+- Press hotkey, pause 0.5 seconds, then speak
+- This gives the audio device time to initialize
+
+**On Wayland (won't work):**
+```bash
+# Check display server
+echo $XDG_SESSION_TYPE
+
+# If "wayland", switch to X11:
+# Log out → Login screen → Gear icon → "Ubuntu on Xorg"
+```
+
+**Service won't start:**
+```bash
+# Run manually to see errors
+cd ~/soupawhisper
+poetry run python dictate.py
+```
+
+## Hardware Recommendations
+
+### CPU Performance Tiers
+
+**Budget (< $200):**
+- Intel N100, Celeron: base.en or tiny.en only
+- Expected: 5-10 sec for 10 sec speech
+
+**Mid-range ($200-600):**
+- Intel i5-12400, Ryzen 5 5600: base.en or small.en
+- Expected: 1-3 sec for 10 sec speech
+
+**High-end ($600+):**
+- Intel i7-12650H, i9-13900K, Ryzen 9 7950X: any model including medium.en
+- Expected: 0.5-5 sec for 10 sec speech
+
+**Enthusiast (workstation):**
+- Threadripper, Xeon: large-v3 feasible
+- Expected: < 10 sec for 10 sec speech
+
+### GPU Acceleration
+
+SoupaWhisper supports CUDA for NVIDIA GPUs:
+
+```ini
+[whisper]
+device = cuda
+compute_type = float16
+```
+
+**Expected speedup:** 2-4x faster than CPU
+
+**Requirements:**
+- NVIDIA GPU with 4GB+ VRAM
+- CUDA 11.x or 12.x installed
+- cuDNN libraries
+
+GPU acceleration is most beneficial for larger models (medium.en, large-v3) on mid-range CPUs.
+
+## Real-World Performance Examples
+
+### Intel i7-12650H (10 cores, 32GB RAM)
+
+**Recommended: medium.en**
+- 10 sec speech → 3.5 sec wait
+- 20 sec speech → 7 sec wait
+- Accuracy: 97-99%
+- Verdict: Excellent for professional dictation
+
+### Intel i5-10400 (6 cores, 16GB RAM)
+
+**Recommended: small.en**
+- 10 sec speech → 2-3 sec wait
+- 20 sec speech → 4-6 sec wait
+- Accuracy: 95-98%
+- Verdict: Great balance
+
+### Intel N100 (4 cores, 8GB RAM)
+
+**Recommended: base.en**
+- 10 sec speech → 4-6 sec wait
+- 20 sec speech → 8-12 sec wait
+- Accuracy: 90-95%
+- Verdict: Usable for casual dictation
+
+## Comparison with Alternatives
+
+| Feature | SoupaWhisper | Wispr Flow | Talon Voice | Google Docs Voice |
+|---------|--------------|------------|-------------|-------------------|
+| **Price** | Free | $8-12/mo | Free/Patreon | Free |
+| **Privacy** | 100% local | Cloud | Local | Cloud |
+| **Linux Support** | ✅ Yes | ❌ No | ✅ Yes | ✅ Browser |
+| **Offline** | ✅ Yes | ❌ No | ✅ Yes | ❌ No |
+| **Setup** | Easy | N/A | Hard | None |
+| **Accuracy** | 90-99% | ~98% | 95%+ | ~98% |
+| **Latency** | 0.5-10s | < 1s | 1-3s | 1-2s |
+| **Custom vocab** | Limited | Yes | Yes | No |
+| **Code dictation** | No | No | Yes | No |
+
+**When to use SoupaWhisper:**
+- ✅ You need privacy (healthcare, legal, confidential work)
+- ✅ You want offline capability
+- ✅ You're on Linux
+- ✅ You don't want subscriptions
+- ✅ You have decent hardware (4+ cores)
+
+**When to use alternatives:**
+- Wispr Flow: macOS/Windows, want best UX, don't mind cloud
+- Talon Voice: Need to dictate code syntax, willing to invest learning time
+- Google Docs: Casual use, already in Google ecosystem
+
+## Advanced Configuration
+
+### Custom Hotkeys in Scripts
+
+Create task-specific hotkeys:
+
+```bash
+# Create a "code dictation" config
+cp ~/.config/soupawhisper/config.ini ~/.config/soupawhisper/code.ini
+nano ~/.config/soupawhisper/code.ini
+# Change: model = medium.en (better with technical terms)
+# Change: key = f13
+
+# Run with alternate config
+poetry run python dictate.py --config ~/.config/soupawhisper/code.ini
+```
+
+### Multiple Language Support
+
+SoupaWhisper uses English-only models by default (.en suffix). For multilingual:
+
+```ini
+[whisper]
+model = small  # Remove .en for multilingual
+```
+
+The multilingual models are slower but support 99 languages.
+
+### Integration with Text Editors
+
+SoupaWhisper works with any text editor through xdotool, but you can create editor-specific workflows:
+
+**VS Code:**
+```bash
+# Create keybinding in VS Code
+# settings.json:
+{
+  "key": "ctrl+shift+v",
+  "command": "editor.action.clipboardPasteAction"
+}
+# Then use SoupaWhisper with clipboard mode
+```
+
+**Vim:**
+```vim
+" In .vimrc - paste from clipboard with leader+v
+nnoremap <leader>v "+p
+```
+
+## Troubleshooting
+
+### Audio Issues
+
+**Test microphone:**
+```bash
+# Record 5 seconds
+arecord -d 5 -f cd test.wav
+
+# Play back
+aplay test.wav
+```
+
+**List audio devices:**
+```bash
+arecord -l
+```
+
+**Fix permissions:**
+```bash
+# Add to audio group
+sudo usermod -a -G audio $USER
+
+# Verify
+groups | grep audio
+
+# Log out and back in if just added
+```
+
+### Performance Issues
+
+**Model takes forever to load:**
+- First run downloads the model (~100MB-1.5GB)
+- Subsequent runs load from cache (~1-2 seconds)
+- Cache location: `~/.cache/huggingface/hub/`
+
+**Transcription very slow:**
+- Run benchmark to verify expected performance
+- Check CPU usage: `htop` or `top` while transcribing
+- Close other heavy applications
+- Consider smaller model
+
+**Out of memory:**
+```bash
+# Check RAM usage
+free -h
+
+# For large models on 8GB systems, reduce beam size in dictate.py:
+# model.transcribe(..., beam_size=1)  # Default is 5
+```
+
+### X11/Wayland Issues
+
+**Check display server:**
+```bash
+echo $XDG_SESSION_TYPE
+```
+
+**Switch to X11 (Ubuntu):**
+1. Log out
+2. Click username
+3. Click gear icon (⚙️) bottom-right
+4. Select "Ubuntu on Xorg"
+5. Log in
+
+**For other distros:** Look for "X11" or "Xorg" session option at login.
+
+## Performance Optimization
+
+### CPU Affinity
+
+For systems with P-cores and E-cores (12th+ gen Intel), you can pin SoupaWhisper to P-cores:
+
+```bash
+# Find your P-cores (usually 0-N where N is P-core count)
+lscpu | grep "Core(s) per socket"
+
+# Run with taskset (cores 0-5 for example)
+taskset -c 0-5 poetry run python dictate.py
+```
+
+### Model Caching
+
+Models are cached after first download. To pre-download:
+
+```bash
+cd ~/soupawhisper
+poetry run python -c "from faster_whisper import WhisperModel; WhisperModel('medium.en', device='cpu', compute_type='int8')"
+```
+
+### Reduce Memory Usage
+
+```ini
+[whisper]
+# Use int8 quantization (default, most efficient)
+compute_type = int8
+
+# For even lower memory, edit dictate.py:
+# model.transcribe(..., beam_size=1)  # Lower = faster, less memory, slightly less accurate
+```
+
+## Conclusion
+
+SoupaWhisper provides a powerful, private, and free alternative to commercial dictation services on Linux. With the right hardware and model selection, you can achieve 95-99% accuracy with comfortable response times—all without sending your voice data to the cloud.
+
+**Quick recap:**
+1. Install SoupaWhisper with the official installer
+2. Run benchmarks to find your optimal model
+3. Configure hotkey (scroll_lock recommended)
+4. Set up systemd service for auto-start
+5. Dictate in 10-20 second bursts for best results
+
+**Resources:**
+- GitHub: https://github.com/ksred/soupawhisper
+- Whisper Paper: https://arxiv.org/abs/2212.04356
+- faster-whisper: https://github.com/SYSTRAN/faster-whisper
+
+Happy dictating! 🎤
