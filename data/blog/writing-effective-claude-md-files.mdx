@@ -1,0 +1,466 @@
+---
+title: 'Writing Effective CLAUDE.md Files: Real Examples, Patterns, and What Not to Include'
+date: '2026-02-18'
+tags: ['claude', 'developer-tools', 'automation', 'dx', 'ai']
+draft: false
+summary: Your CLAUDE.md is a contract between you and an AI developer. Most are too long, full of style rules a linter should enforce, and missing the context Claude actually needs. Here's what the best ones look like — with real examples from production monorepos, single-package libraries, and Anthropic's own teams.
+---
+
+**TL;DR:** A good CLAUDE.md is short (~100-200 lines), opinionated, and focused on things Claude can't figure out by reading your code. It documents build commands, architectural decisions, common mistakes, and verification steps. It does _not_ duplicate your linter config, embed code snippets that go stale, or try to be a comprehensive project manual. The best teams treat it like a living runbook — updated multiple times a week based on what Claude actually gets wrong.
+
+---
+
+In the [companion post on hardening your Claude Code setup](/blog/hardening-claude-code-hooks-permissions-verification), I covered hooks, permissions, and verification checkpoints — the automation layers that catch mistakes mechanically. But all of that machinery runs on top of one foundational file: `CLAUDE.md`.
+
+Most developers either skip it entirely or dump everything they know about their project into it. Both approaches fail. This post shows what works, drawing from real production examples and the practices of the team that built Claude Code itself.
+
+## What CLAUDE.md Actually Is
+
+CLAUDE.md is a markdown file that Claude Code reads at the start of every session. It becomes part of Claude's system prompt — the persistent context that shapes every response and action.
+
+Think of it as onboarding documentation for a new developer who is extremely capable but has zero institutional knowledge. You wouldn't hand a new hire your entire wiki. You'd give them the 20% of context that covers 80% of their first week.
+
+### The File Hierarchy
+
+Claude Code loads CLAUDE.md files from multiple locations in a specific order of precedence:
+
+| Location | Scope | Checked into git? |
+| --- | --- | --- |
+| `~/.claude/CLAUDE.md` | All projects (global) | No |
+| `CLAUDE.md` (project root) | Whole team, this repo | Yes |
+| `CLAUDE.local.md` (project root) | Just you, this repo | No (gitignored) |
+| `packages/api/CLAUDE.md` | Subdirectory-scoped | Yes |
+
+**How loading works:** Ancestor files (above your working directory) load eagerly at startup. Descendant files (in subdirectories below) load lazily — only when Claude reads files in that directory. This means in a monorepo, the frontend team's instructions don't consume tokens until Claude actually touches frontend code.
+
+More specific files take precedence over broader ones. If your root CLAUDE.md says "use npm" but `packages/api/CLAUDE.md` says "use pnpm," the pnpm instruction wins when Claude is working in that directory.
+
+You can also import other files with `@path/to/file` syntax — useful for pulling in shared conventions without copy-pasting.
+
+## The Target: ~100 Lines, ~2.5k Tokens
+
+Boris Cherny, head of Claude Code at Anthropic, keeps his team's CLAUDE.md at roughly 2.5k tokens (~100 lines). Most developers are at 10,000+ tokens and getting _worse_ results.
+
+Why? As instruction count increases, instruction-following quality degrades _uniformly_ — Claude doesn't just ignore newer instructions, it starts ignoring all of them. Research suggests frontier LLMs can reliably follow ~150-200 instructions. Claude Code's system prompt already contains ~50, which means your CLAUDE.md has a budget of roughly 100-150 instructions before quality drops off a cliff.
+
+Every line should earn its place. For each instruction, ask: "Would removing this cause Claude to make a mistake?" If the answer is no, cut it.
+
+## Anatomy of a Good CLAUDE.md
+
+The best files share a consistent structure. Here's what each section should cover:
+
+### 1. Project Overview (2-3 lines)
+
+Not a README. Just enough context that Claude knows what kind of codebase it's in.
+
+```markdown
+## Project
+
+TypeScript monorepo for a SaaS API platform. Turborepo + pnpm workspaces.
+Packages: web (Next.js 15), api (Hono), shared (core types + utilities).
+```
+
+### 2. Essential Commands
+
+The commands Claude needs to build, test, lint, and verify. This is the highest-value section — Claude can't infer these from code alone, and getting them wrong wastes entire sessions.
+
+```markdown
+## Commands
+
+- Build: `pnpm build` (all packages) or `pnpm --filter api build`
+- Test: `pnpm test` (unit) or `pnpm --filter api test:integration` (requires Docker)
+- Lint: `pnpm lint`
+- Type check: `pnpm typecheck`
+- Format: `pnpm format`
+- Codegen: `pnpm generate` (run after changing any .graphql file)
+```
+
+Be specific. "Run the tests" is useless. `pnpm --filter api test:integration` is actionable.
+
+### 3. Architecture Decisions Claude Can't Infer
+
+Document the _why_, not the _what_. Claude can read your code to see what you did. It can't read your mind to know why.
+
+```markdown
+## Architecture
+
+- Database access goes through repository classes only — never raw SQL in handlers
+- Feature flags via LaunchDarkly SDK — check before using environment variables
+- All API responses use the Result<T, E> wrapper from @acme/core/types
+- Internal package dependencies use workspace:* protocol
+```
+
+### 4. Common Mistakes (the Feedback Flywheel)
+
+This is the section Anthropic's own teams update multiple times a week. When Claude makes a mistake, add it here so it doesn't repeat.
+
+```markdown
+## Common Mistakes
+
+- Do NOT import from @acme/core/src — use @acme/core (the package export)
+- Generated types live in src/generated/ — never edit these manually, run `pnpm generate`
+- The auth middleware must be applied before rate limiting (order matters in the stack)
+- Use `vi.mock()` not `jest.mock()` — this project uses Vitest, not Jest
+```
+
+### 5. Verification Checkpoints
+
+Tell Claude _when_ to verify, not just _how_. This section is the bridge between CLAUDE.md and the [verification checkpoints covered in the hardening post](/blog/hardening-claude-code-hooks-permissions-verification).
+
+```markdown
+## Verification
+
+After completing any unit of work:
+1. `pnpm --filter <affected-package> typecheck`
+2. `pnpm --filter <affected-package> test`
+
+Before claiming a task is complete:
+1. `pnpm lint && pnpm typecheck`
+2. All tests pass
+```
+
+## Real-World Examples
+
+Let's look at how production projects actually structure their CLAUDE.md files.
+
+### Example 1: Supabase JS SDK (Monorepo)
+
+The [supabase-js](https://github.com/supabase/supabase-js) repository is an Nx monorepo containing six packages (@supabase/supabase-js, auth-js, postgrest-js, realtime-js, storage-js, functions-js). Their CLAUDE.md demonstrates several good patterns:
+
+**What they do well:**
+
+- **Package-specific test commands with Docker requirements.** They don't just say "run the tests." They document which packages need Docker, and give exact commands like `nx test:auth auth-js` vs `nx test realtime-js` (no Docker needed). This is context Claude literally cannot infer.
+
+```markdown
+| Package      | Docker | Complete Test Command              |
+|--------------|--------|------------------------------------|
+| auth-js      | ✅     | `nx test:auth auth-js`             |
+| storage-js   | ✅     | `nx test:storage storage-js`       |
+| postgrest-js | ✅     | `nx test:ci:postgrest postgrest-js`|
+| functions-js | ✅     | `nx test functions-js`             |
+| realtime-js  | ❌     | `nx test realtime-js`              |
+| supabase-js  | ❌     | `nx test supabase-js`              |
+```
+
+- **Commit conventions with concrete scope values.** Rather than saying "use conventional commits," they list the exact valid scopes: `auth, functions, postgrest, realtime, storage, supabase, repo, deps, ci, release, docs, scripts, misc`. Claude doesn't have to guess.
+
+- **Explicit anti-patterns.** A dedicated section listing common mistakes:
+
+```markdown
+## Common Mistakes to Avoid
+
+- ❌ Hardcoding internal versions; use `"*"` instead
+- ❌ Running npm directly in library directories; use Nx commands
+- ❌ Assuming standard `nx test` works for all packages
+- ❌ Introducing breaking changes without proper versioning strategy
+```
+
+- **Pointers, not content.** Rather than embedding their full contribution guidelines, they point to separate files: `See CONTRIBUTING.md`, `See docs/TESTING.md`, `See docs/RELEASE.md`.
+
+### Example 2: MCP TypeScript SDK (Multi-Package Library)
+
+The [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) takes a different approach — tighter and more architectural:
+
+**What they do well:**
+
+- **Architecture as layers.** They describe the SDK as three layers (Types → Protocol → High-Level APIs) so Claude understands where new code belongs. This is the kind of structural knowledge that saves entire wrong-direction attempts.
+
+- **Change protocols.** Breaking changes must be documented in _two_ files: `docs/migration.md` (human-readable) and `docs/migration-SKILL.md` (LLM-optimized with before/after code examples). This is a clever pattern — they've anticipated that Claude will be both a contributor and a consumer of their documentation.
+
+- **Filtered commands.** `pnpm build:all` for everything, `--filter` for targeting specific packages. Simple, but it means Claude can scope its work precisely.
+
+### Example 3: Small Single-Package Project
+
+For smaller projects, you need even less. Here's a pattern distilled from several effective single-package CLAUDE.md files:
+
+```markdown
+## Project
+
+Astro 5 blog with Tailwind CSS 4 and TypeScript.
+
+## Stack
+
+- Node 22, pnpm
+- Astro 5 framework
+- Tailwind CSS 4
+- TypeScript strict mode
+
+## Commands
+
+- Dev: `pnpm dev`
+- Build: `pnpm build`
+- Format: `pnpm run format`
+- Lint: `pnpm run lint`
+- Type check: `pnpm run type-check`
+
+## Conventions
+
+- Prefer types over interfaces for TypeScript
+- Favor smaller, modular components over monolithic ones
+- Review existing patterns in the codebase before creating new abstractions
+
+## After Completing Any Task
+
+Run in this order:
+1. `pnpm run format`
+2. `pnpm run lint`
+3. `pnpm run type-check`
+```
+
+That's ~30 lines. It's enough for Claude to be productive without any hand-holding.
+
+## Monorepo vs. Single Package: How to Scope
+
+The key difference is _where_ instructions live, not _how many_ you write.
+
+### Single Package
+
+One `CLAUDE.md` at the root. Everything in one file. Keep it under 100 lines.
+
+```
+my-app/
+├── CLAUDE.md          # Everything goes here
+├── CLAUDE.local.md    # Your personal preferences (gitignored)
+├── src/
+└── package.json
+```
+
+### Monorepo
+
+Layer your instructions. Root file for shared conventions, package files for specifics.
+
+```
+platform/
+├── CLAUDE.md               # Shared: commit style, CI commands, architecture overview
+├── packages/
+│   ├── web/
+│   │   └── CLAUDE.md       # Next.js patterns, component conventions
+│   ├── api/
+│   │   └── CLAUDE.md       # API patterns, middleware stack, DB access rules
+│   └── shared/
+│       └── CLAUDE.md       # Export conventions, type generation
+└── services/
+    └── billing/
+        └── CLAUDE.md       # Billing-specific domain rules, Stripe integration notes
+```
+
+**Root CLAUDE.md** (shared across all packages):
+
+```markdown
+## Platform
+
+TypeScript monorepo. Turborepo + pnpm workspaces.
+
+## Commit Convention
+
+Conventional commits required. Format: `type(scope): description`
+Valid scopes: web, api, shared, billing, infra, ci, docs
+
+## Commands (full repo)
+
+- Build all: `turbo run build`
+- Lint all: `turbo run lint`
+- Type check all: `turbo run typecheck`
+
+## Architecture
+
+- Package dependencies flow downward only: web → api → shared
+- Shared types live in @platform/shared/types
+- Database access exclusively through repository pattern in @platform/api
+```
+
+**packages/api/CLAUDE.md** (API-specific):
+
+```markdown
+## API Package
+
+Hono HTTP framework with tRPC for internal RPC.
+
+## Commands
+
+- Dev: `pnpm --filter api dev`
+- Test: `pnpm --filter api test`
+- Test (integration, needs Docker): `pnpm --filter api test:integration`
+
+## Patterns
+
+- All routes defined in src/routes/ — one file per resource
+- Middleware stack order: auth → rate-limit → validation → handler
+- Use Result<T, E> for all handler returns — never throw from handlers
+- Database queries go through src/repositories/ — never raw SQL in routes
+```
+
+The root is ~20 lines. Each package file is ~15 lines. Claude only loads what's relevant to the code it's touching.
+
+## What NOT to Put in CLAUDE.md
+
+This is where most people go wrong. Here are the most common mistakes, ranked by how much damage they do.
+
+### 1. Code Style Rules → Use a Linter
+
+**The single most common mistake.** Never send an LLM to do a linter's job. Linters are fast, deterministic, and free. LLMs are slow, probabilistic, and expensive.
+
+```markdown
+# ❌ Don't put this in CLAUDE.md
+- Use 2-space indentation
+- Always use semicolons
+- Prefer single quotes over double quotes
+- Maximum line length of 100 characters
+- Use trailing commas in multi-line arrays
+
+# ✅ Instead, use a PostToolUse hook that runs your formatter
+# Claude gets instant feedback on every edit — no instructions needed
+```
+
+If your linter catches it, your CLAUDE.md doesn't need to mention it.
+
+### 2. Embedded Code Snippets → Use File Pointers
+
+Code in CLAUDE.md goes stale the moment someone changes the source. Point to the real file instead.
+
+```markdown
+# ❌ Don't embed code examples
+Here's how to create a new API route:
+\```typescript
+import { Hono } from 'hono'
+// ... 30 lines of boilerplate ...
+\```
+
+# ✅ Point to a real file
+For new API routes, follow the pattern in src/routes/users.ts
+```
+
+### 3. Everything the Model Already Knows
+
+Claude knows how TypeScript works. It knows how React hooks work. It knows what `async/await` does. Don't waste tokens restating common knowledge.
+
+```markdown
+# ❌ Don't
+- Use async/await instead of raw promises
+- React components should be functional, not class-based
+- Use TypeScript generics for type-safe collections
+
+# ✅ Do (only document what's specific to YOUR project)
+- Use the AsyncResult<T> wrapper from @acme/core — not raw promises
+```
+
+### 4. Prohibitions Without Alternatives
+
+Telling Claude "never do X" leaves it stuck. Always provide the alternative.
+
+```markdown
+# ❌ Don't
+- Never use the --force flag
+
+# ✅ Do
+- Never use git push --force; use git push --force-with-lease instead
+```
+
+### 5. The Entire Project Manual
+
+If you find yourself writing more than 200 lines, you're writing documentation, not instructions. Move the details into separate docs and point to them.
+
+```markdown
+# ❌ Don't: 500-line CLAUDE.md with every API endpoint documented
+
+# ✅ Do: 5-line pointer
+## API Documentation
+- Endpoint reference: see docs/api-reference.md
+- Auth flow: see docs/authentication.md
+- Error codes: see docs/error-handling.md
+```
+
+### 6. @-file Imports of Large Documents
+
+The `@path/to/file` syntax embeds the entire file into Claude's context _on every session_. Use it sparingly for small, stable files. For large or frequently-changing docs, use a path reference instead and let Claude read it on demand.
+
+## The Feedback Flywheel
+
+The best CLAUDE.md files aren't written once — they're maintained through a continuous loop:
+
+1. **Claude makes a mistake** (uses wrong test command, imports from wrong path, forgets to run codegen)
+2. **You add it to the Common Mistakes section** ("use `nx test:auth auth-js`, not `nx test auth-js`")
+3. **Claude stops making that mistake**
+4. **Repeat**
+
+At Anthropic, teams update their CLAUDE.md multiple times a week. In code review, engineers tag `@.claude` on pull requests to add learnings — using the Claude Code GitHub action. The review process isn't just about catching bugs in the current PR; it's about training the development system for the next one.
+
+This creates a virtuous cycle: every mistake makes the system better. Over weeks, your CLAUDE.md converges on exactly the institutional knowledge Claude needs.
+
+## CLAUDE.md vs. CLAUDE.local.md
+
+Use `CLAUDE.md` (checked into git) for team-wide instructions:
+- Build and test commands
+- Architecture decisions
+- Commit conventions
+- Common mistakes
+
+Use `CLAUDE.local.md` (gitignored) for personal preferences:
+- Your preferred editor settings
+- Custom shortcuts or aliases
+- Personal verification workflows
+- Experimental instructions you're testing before promoting to the team file
+
+This separation means the team file stays clean and authoritative, while individuals can experiment without affecting others.
+
+## A Starter Template
+
+Here's a template you can adapt. Delete sections that don't apply. Add specifics for your project.
+
+```markdown
+## Project
+
+[1-2 sentences: what this project is, core tech stack]
+
+## Commands
+
+- Build: `[command]`
+- Test: `[command]`
+- Test (single file): `[command] path/to/test`
+- Lint: `[command]`
+- Type check: `[command]`
+- Format: `[command]`
+
+## Architecture
+
+- [Key architectural decision Claude can't infer from code]
+- [Another one]
+- [Where new code should go for common tasks]
+
+## Conventions
+
+- [Naming conventions specific to this project]
+- [Import/export patterns]
+- [Error handling patterns]
+
+## Common Mistakes
+
+- [Thing Claude gets wrong] → [what to do instead]
+- [Another thing] → [the fix]
+
+## Verification
+
+After completing any unit of work:
+1. [Scoped type check command]
+2. [Scoped test command]
+
+Before claiming complete:
+1. [Full lint + type check]
+2. All tests pass
+```
+
+## Putting It All Together
+
+Your CLAUDE.md is one layer in a three-layer system:
+
+| Layer | What it does | Enforcement |
+| --- | --- | --- |
+| **CLAUDE.md** | Provides context, conventions, and verification steps | Advisory — Claude _should_ follow |
+| **Hooks** | Auto-format, lint, codegen reminders on every edit | Deterministic — runs every time |
+| **Permissions** | Block destructive commands | Hard limit — can't be overridden |
+
+CLAUDE.md handles the things that require judgment — when to run which test suite, what architectural patterns to follow, which mistakes to avoid. Hooks handle the things that should happen mechanically on every edit. Permissions handle the things that should never happen at all.
+
+The instructions tell Claude what good looks like. The hooks ensure it meets the bar. The permissions ensure it can't do damage trying. Together, they turn a capable-but-amnesiac AI into a reliable development partner that carries your team's institutional knowledge into every session.
+
+Start with 30 lines. Add a mistake every time Claude gets something wrong. Delete anything that a linter, formatter, or hook could handle instead. In two weeks, you'll have a CLAUDE.md that's short, specific, and worth more than a 500-line manual — because every line in it was earned by a real mistake.
