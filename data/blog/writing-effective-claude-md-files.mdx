@@ -35,7 +35,9 @@ Claude Code loads CLAUDE.md files from multiple locations in a specific order of
 
 More specific files take precedence over broader ones. If your root CLAUDE.md says "use npm" but `packages/api/CLAUDE.md` says "use pnpm," the pnpm instruction wins when Claude is working in that directory.
 
-You can also import other files with `@path/to/file` syntax — useful for pulling in shared conventions without copy-pasting.
+You can also import other files with `@path/to/file` syntax. Relative paths resolve relative to the file containing the import, not your working directory. Imports can be nested up to 5 levels deep. Use this for small, stable files — not for pulling in your entire docs folder.
+
+On enterprise setups, there's also a **managed policy** location (`/etc/claude-code/CLAUDE.md` on Linux, `/Library/Application Support/ClaudeCode/CLAUDE.md` on macOS) for organization-wide rules set by IT/DevOps. These have the lowest precedence — project files always override them.
 
 ## The Target: ~100 Lines, ~2.5k Tokens
 
@@ -292,6 +294,39 @@ Hono HTTP framework with tRPC for internal RPC.
 
 The root is ~20 lines. Each package file is ~15 lines. Claude only loads what's relevant to the code it's touching.
 
+### The Rules Directory: Modular Alternative
+
+If your CLAUDE.md is getting long, Claude Code offers `.claude/rules/` — a directory where you can split instructions into focused, per-topic files:
+
+```
+my-project/
+├── CLAUDE.md                    # Core project context (kept short)
+├── .claude/
+│   └── rules/
+│       ├── code-style.md        # Loaded at startup (unconditional)
+│       ├── testing.md           # Loaded at startup (unconditional)
+│       ├── frontend.md          # Loaded only for matching paths ↓
+│       └── api.md               # Loaded only for matching paths ↓
+```
+
+The key feature: **path-specific conditional rules**. Add a `paths` frontmatter block, and the rule only loads when Claude touches matching files:
+
+```markdown
+---
+paths:
+  - "src/api/**/*.ts"
+---
+
+# API Development Rules
+- All endpoints must include input validation using zod schemas
+- Use the standard error response format from src/lib/errors.ts
+- Integration tests required for any new endpoint
+```
+
+Rules without `paths` frontmatter load unconditionally at startup, just like CLAUDE.md. This gives you the best of both worlds: shared rules stay short, and domain-specific rules only consume context when relevant.
+
+In a large monorepo, this can be more ergonomic than scattering CLAUDE.md files across dozens of subdirectories. You get the same lazy-loading benefit with a single centralized directory.
+
 ## What NOT to Put in CLAUDE.md
 
 This is where most people go wrong. Here are the most common mistakes, ranked by how much damage they do.
@@ -386,6 +421,22 @@ The best CLAUDE.md files aren't written once — they're maintained through a co
 At Anthropic, teams update their CLAUDE.md multiple times a week. In code review, engineers tag `@.claude` on pull requests to add learnings — using the Claude Code GitHub action. The review process isn't just about catching bugs in the current PR; it's about training the development system for the next one.
 
 This creates a virtuous cycle: every mistake makes the system better. Over weeks, your CLAUDE.md converges on exactly the institutional knowledge Claude needs.
+
+## Skills for Domain Knowledge
+
+One more lever: if you have domain-specific workflows that only matter sometimes (deploying to staging, running database migrations, debugging a particular subsystem), don't put them in CLAUDE.md. Use `.claude/skills/` instead.
+
+Skills are markdown files that Claude loads _on demand_ — invoked through slash commands or automatically when relevant. They don't consume context in every session, only when needed.
+
+```
+.claude/
+├── skills/
+│   ├── deploy-staging.md      # /deploy-staging
+│   ├── db-migration.md        # /db-migration
+│   └── debug-auth.md          # /debug-auth
+```
+
+Rule of thumb: if it applies to >80% of sessions, put it in CLAUDE.md. If it applies to <20%, make it a skill. If it's somewhere in between, use a conditional rule with `paths` frontmatter in `.claude/rules/`.
 
 ## CLAUDE.md vs. CLAUDE.local.md
 
