@@ -1,0 +1,282 @@
+---
+title: 'Hardening Your Claude Code Setup: Hooks, Permissions, and Automated Verification'
+date: '2026-02-18'
+tags: ['claude', 'developer-tools', 'automation', 'dx', 'ai']
+draft: false
+summary: Add PostToolUse hooks that auto-format and lint every file Claude edits, verification checkpoints in CLAUDE.md, and permission deny rules that block irreversible commands. Claude catches its own mistakes instead of you catching them three round trips later.
+---
+
+**TL;DR:** Add three things to your Claude Code setup: (1) PostToolUse hooks that auto-format and lint every file Claude edits, so it gets instant feedback; (2) verification checkpoints in your CLAUDE.md that tell Claude to run tests and type checks before claiming work is done; (3) permission deny rules that block force-push and other irreversible commands. Result: Claude catches its own mistakes instead of you catching them three round trips later.
+
+---
+
+Most Claude Code users stop at the CLAUDE.md file. That alone is a massive improvement — but there are three more layers that turn Claude from a code assistant into a reliable development partner that catches its own mistakes.
+
+## The Problem
+
+Claude writes code that looks right but breaks in ways you only discover later: lint errors, stale codegen artifacts, type mismatches across packages. You end up babysitting every session with "now run the tests" and "you forgot to regenerate the types."
+
+The fix isn't better prompting. It's automation.
+
+## Layer 1: PostToolUse Hooks
+
+Every time Claude edits a file, hooks run automatically and feed results back into its context. Claude sees the output and reacts — no prompting needed.
+
+Configure them in `.claude/settings.local.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prettier-format.sh",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/eslint-check.sh",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/codegen-nudge.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Auto-format on every edit
+
+Claude's edits don't always match your project's formatting. This hook runs your formatter on every file Claude touches, silently.
+
+```bash
+#!/bin/bash
+# .claude/hooks/prettier-format.sh
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+[ -z "$FILE_PATH" ] && exit 0
+[ -f "$FILE_PATH" ] || exit 0
+
+case "$FILE_PATH" in
+  */node_modules/*|*/generated/*|*/dist/*) exit 0 ;;
+esac
+
+cd "$CLAUDE_PROJECT_DIR" || exit 0
+npx prettier --write "$FILE_PATH" > /dev/null 2>&1
+exit 0
+```
+
+Adapt this to your formatter — `black` for Python, `rustfmt` for Rust, whatever your project uses.
+
+### Lint every file on edit
+
+This is the highest-value hook. It runs your linter on the single file that was just modified. If it fails, Claude sees the error immediately and fixes it before moving on.
+
+```bash
+#!/bin/bash
+# .claude/hooks/lint-check.sh
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+[ -z "$FILE_PATH" ] && exit 0
+[ -f "$FILE_PATH" ] || exit 0
+
+# Only lint source files
+case "$FILE_PATH" in
+  *.ts|*.tsx|*.js|*.jsx) ;;
+  *) exit 0 ;;
+esac
+
+# Skip generated/vendored code
+case "$FILE_PATH" in
+  */node_modules/*|*/generated/*|*/dist/*) exit 0 ;;
+esac
+
+cd "$CLAUDE_PROJECT_DIR" || exit 0
+npx eslint --no-warn-ignored "$FILE_PATH" 2>&1
+exit 0
+```
+
+The key: it checks one file, not the whole project, so it completes in 1-2 seconds. Claude gets instant feedback on every edit without slowing down.
+
+### Nudge when codegen is needed
+
+If your project has a code generation step (GraphQL codegen, protobuf, OpenAPI, etc.), Claude will forget to run it. This hook pattern-matches on file paths and prints a reminder that Claude sees in its context:
+
+```bash
+#!/bin/bash
+# .claude/hooks/codegen-nudge.sh
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+[ -z "$FILE_PATH" ] && exit 0
+
+case "$FILE_PATH" in
+  */schema/*.ts|*/graphql/*.ts)
+    echo "CODEGEN REMINDER: You edited a schema file. When done with schema changes, run:"
+    echo "  npm run generate"
+    ;;
+  *.proto)
+    echo "CODEGEN REMINDER: You edited a protobuf file. Run: buf generate"
+    ;;
+  *.graphql)
+    echo "CODEGEN REMINDER: You edited a GraphQL document. Run: npm run codegen"
+    ;;
+esac
+exit 0
+```
+
+This isn't running the codegen — just reminding Claude to do it. The reminder appears in Claude's context after the edit, so it queues up the regeneration before writing code that depends on the generated output.
+
+## Layer 2: Verification Checkpoints in CLAUDE.md
+
+Hooks catch per-file issues. But you also need broader checks — tests, cross-package type checking — at natural stopping points. Put these in `.claude.local.md` (or `CLAUDE.md` if you want the whole team to benefit):
+
+```markdown
+## Verification Checkpoints
+
+You MUST run verification at these points — do not skip or defer:
+
+1. **After finishing a logical unit of work** (new function, endpoint, component, bug fix):
+   - Run the linter and type checker scoped to the package you touched
+   - Run relevant tests
+
+2. **Before claiming any task is complete:**
+   - Run the full lint + type check that CI runs
+   - All tests must pass
+
+3. **After changing generated code inputs** (schemas, protos, OpenAPI specs):
+   - Run the codegen pipeline
+   - Verify downstream code still compiles
+```
+
+The key insight: **scope the checks**. In a monorepo, don't run the full lint after every change. Run it for the package you touched. Same coverage, faster feedback.
+
+For example, if your monorepo uses Turborepo:
+
+```markdown
+- API code → `turbo run lint:ci ts test:once --filter=api`
+- Web code → `turbo run lint:ci ts --filter=web`
+- Both or unsure → `yarn lint:ci && yarn ts`
+```
+
+## Layer 3: Permissions as Guardrails
+
+Allow what's safe, deny what's destructive:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push *)",
+      "Bash(yarn *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(gh *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push * --force*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)"
+    ]
+  }
+}
+```
+
+Claude can commit and push, but can't force-push or blow away uncommitted work. This lets you grant autonomy without anxiety. The deny list is short because most things should be allowed — you just need to block the irreversible ones.
+
+## How It Plays Out
+
+**Before:**
+
+```
+Claude: writes schema file
+Claude: writes frontend code using new types
+Claude: "Done!"
+You:     build fails — types not regenerated
+You:     "You forgot to run codegen"
+Claude:  runs codegen
+You:     lint still fails
+         ...3 more round trips
+```
+
+**After:**
+
+```
+Claude: writes schema file
+  ← hook: formatter runs
+  ← hook: linter passes
+  ← hook: "CODEGEN REMINDER: run npm run generate"
+Claude: runs codegen
+Claude: writes frontend code using new types
+  ← hook: formatter runs
+  ← hook: linter passes
+Claude: verification checkpoint → runs lint + types + tests
+Claude: "Done. All checks pass."
+```
+
+Zero back-and-forth. Works on first delivery.
+
+## Making It Portable
+
+All of these files are untracked (`.claude/` is typically gitignored). To replicate your setup on another machine, bundle everything into a single idempotent setup script:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+mkdir -p "$PROJECT_ROOT/.claude/hooks"
+
+write_if_missing() {
+  if [ -f "$1" ]; then
+    echo "  SKIP $2 (already exists)"
+    return 1
+  else
+    echo "  CREATE $2"
+    return 0
+  fi
+}
+
+if write_if_missing "$PROJECT_ROOT/.claude/hooks/lint-check.sh" "lint hook"; then
+  cat > "$PROJECT_ROOT/.claude/hooks/lint-check.sh" << 'HOOK'
+#!/bin/bash
+# ... your hook content ...
+HOOK
+  chmod +x "$PROJECT_ROOT/.claude/hooks/lint-check.sh"
+fi
+
+# ... repeat for each file ...
+```
+
+The `write_if_missing` guard makes it safe to re-run. Transfer with `scp`, `wormhole send`, or check it into a private dotfiles repo. Run it once in any clone and your full environment is there.
+
+For git worktrees, symlink the config from the main worktree instead of copying:
+
+```bash
+# ~/.claude/setup-worktree.sh
+SOURCE=$(git -C "$WORKTREE" worktree list --porcelain | head -1 | sed 's/^worktree //')
+ln -s "$SOURCE/.claude" "$WORKTREE/.claude"
+ln -s "$SOURCE/.claude.local.md" "$WORKTREE/.claude.local.md"
+```
+
+## The Stack
+
+| Layer | What it does | When it runs | Speed |
+| --- | --- | --- | --- |
+| **PostToolUse hooks** | Format, lint, codegen reminders | Every file edit | 1-2s |
+| **CLAUDE.md checkpoints** | Tests, type checking, full lint | After units of work | 10-60s |
+| **Permissions** | Block destructive commands | Before execution | Instant |
+
+Hooks are the safety net Claude can't forget. Instructions are the discipline it follows. Permissions are the hard limits it can't override. Together, they turn "AI assistant that needs supervision" into "AI developer that catches its own mistakes."
