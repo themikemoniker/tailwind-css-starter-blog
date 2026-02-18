@@ -123,15 +123,103 @@ Before claiming a task is complete:
 
 ## Real-World Examples
 
-Let's look at how production projects actually structure their CLAUDE.md files.
+Let's look at how production projects actually structure their CLAUDE.md files — from five-line pointers to comprehensive monorepo guides.
 
-### Example 1: Supabase JS SDK (Monorepo)
+### facebook/react: The Minimal Pointer
 
-The [supabase-js](https://github.com/supabase/supabase-js) repository is an Nx monorepo containing six packages (@supabase/supabase-js, auth-js, postgrest-js, realtime-js, storage-js, functions-js). Their CLAUDE.md demonstrates several good patterns:
+[React's CLAUDE.md](https://github.com/facebook/react/blob/main/CLAUDE.md) is roughly five lines:
 
-**What they do well:**
+```markdown
+# React
 
-- **Package-specific test commands with Docker requirements.** They don't just say "run the tests." They document which packages need Docker, and give exact commands like `nx test:auth auth-js` vs `nx test realtime-js` (no Docker needed). This is context Claude literally cannot infer.
+React is a JavaScript library for building user interfaces.
+
+## Monorepo Overview
+
+- **React**: All files outside `/compiler/`
+- **React Compiler**: `/compiler/` directory (has its own instructions)
+```
+
+That's it. The root file is a router — it tells Claude that React and React Compiler are separate workspaces, each with their own CLAUDE.md. This leverages lazy-loading: the compiler's instructions only load when Claude touches `/compiler/` files.
+
+**Takeaway:** In a monorepo, the root file's job is to _orient_, not to _instruct_. Push the details into subdirectory files.
+
+### anthropics/claude-code-action: "Things That Will Bite You"
+
+[Anthropic's own GitHub Action](https://github.com/anthropics/claude-code-action/blob/main/CLAUDE.md) for Claude Code demonstrates one of the most effective section patterns — a "Things That Will Bite You" section that names the gotchas directly:
+
+```markdown
+## Things That Will Bite You
+
+- Strict TypeScript: noUnusedLocals and noUnusedParameters are enabled.
+- Discriminated unions for GitHub context — call isEntityContext(context) first.
+- Token lifecycle matters: revocation is in a separate always() step.
+- Error phase attribution uses prepareCompleted flag.
+- action.yml outputs reference step IDs — rename carefully.
+- Integration testing happens in a separate repo.
+```
+
+This naming is intentional. "Common Mistakes" is passive — "Things That Will Bite You" grabs attention. Every line is a specific, non-obvious trap that Claude would fall into without warning.
+
+They also include a crisp two-paragraph "How It Runs" section that maps the entire execution flow, and a "Key Concepts" section with the three most important architectural decisions. Total file: ~60 lines.
+
+### metabase/metabase: The Skills-Only Approach
+
+[Metabase](https://github.com/metabase/metabase/blob/master/CLAUDE.md) takes an extreme approach — their root CLAUDE.md is almost entirely pointers:
+
+```markdown
+# Skills
+
+For detailed guidance on writing and reviewing code and documentation,
+see the skills in .claude/skills/:
+
+## Clojure
+- clojure-write - Clojure/ClojureScript development with REPL-driven workflow
+- clojure-review - Clojure/ClojureScript code review guidelines
+
+## TypeScript
+- typescript-write - TypeScript/JavaScript development and best practices
+- typescript-review - TypeScript/JavaScript code review guidelines
+
+## Documentation
+- docs-write - Documentation writing with Metabase style guide
+- docs-review - Documentation review checklist
+
+**Important**: When working with frontend code, read frontend/CLAUDE.md
+for project-specific guidelines.
+```
+
+Zero commands. Zero architecture docs. Just a map to skills and subdirectory files. This works because Metabase is a large multi-language codebase (Clojure + TypeScript) — loading Clojure patterns when you're editing React components would waste tokens. Skills load on demand, and subdirectory CLAUDE.md files load lazily.
+
+**Takeaway:** For large, multi-language codebases, consider moving most content into skills and subdirectory files. The root file becomes a table of contents.
+
+### modelcontextprotocol/python-sdk: FORBIDDEN Markers
+
+The [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk/blob/main/CLAUDE.md) uses strong emphasis markers to flag absolute rules:
+
+```markdown
+## Core Development Rules
+
+1. Package Management
+   - ONLY use uv, NEVER pip
+   - FORBIDDEN: uv pip install, @latest syntax
+
+2. Code Quality
+   - Type hints required for all code
+   - FORBIDDEN: imports inside functions. THEY SHOULD BE AT THE TOP OF THE FILE.
+
+3. Testing Requirements
+   - Framework: uv run --frozen pytest
+   - IMPORTANT: tests/client/test_client.py is the most well designed test file.
+     Follow its patterns.
+   - IMPORTANT: Be minimal, focus on E2E tests using mcp.client.Client whenever possible.
+```
+
+Note the graduated emphasis: plain text for standard rules, IMPORTANT for strong preferences, FORBIDDEN for absolute prohibitions. This hierarchy helps Claude calibrate how strictly to follow each rule. But use it sparingly — if everything is IMPORTANT, nothing is.
+
+### Supabase JS SDK: Package-Specific Commands
+
+The [supabase-js](https://github.com/supabase/supabase-js) repository is an Nx monorepo containing six packages. Their CLAUDE.md demonstrates how to document environment-dependent commands:
 
 ```markdown
 | Package      | Docker | Complete Test Command              |
@@ -144,48 +232,16 @@ The [supabase-js](https://github.com/supabase/supabase-js) repository is an Nx m
 | supabase-js  | ❌     | `nx test supabase-js`              |
 ```
 
-- **Commit conventions with concrete scope values.** Rather than saying "use conventional commits," they list the exact valid scopes: `auth, functions, postgrest, realtime, storage, supabase, repo, deps, ci, release, docs, scripts, misc`. Claude doesn't have to guess.
+They also list exact valid commit scopes (`auth, functions, postgrest, realtime, storage, supabase, repo, deps, ci, release, docs, scripts, misc`) and a concrete anti-patterns section. The pattern of specifying which tests need Docker and which don't saves Claude from trial-and-error that would burn through context.
 
-- **Explicit anti-patterns.** A dedicated section listing common mistakes:
+### Small Single-Package Project
 
-```markdown
-## Common Mistakes to Avoid
-
-- ❌ Hardcoding internal versions; use `"*"` instead
-- ❌ Running npm directly in library directories; use Nx commands
-- ❌ Assuming standard `nx test` works for all packages
-- ❌ Introducing breaking changes without proper versioning strategy
-```
-
-- **Pointers, not content.** Rather than embedding their full contribution guidelines, they point to separate files: `See CONTRIBUTING.md`, `See docs/TESTING.md`, `See docs/RELEASE.md`.
-
-### Example 2: MCP TypeScript SDK (Multi-Package Library)
-
-The [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) takes a different approach — tighter and more architectural:
-
-**What they do well:**
-
-- **Architecture as layers.** They describe the SDK as three layers (Types → Protocol → High-Level APIs) so Claude understands where new code belongs. This is the kind of structural knowledge that saves entire wrong-direction attempts.
-
-- **Change protocols.** Breaking changes must be documented in _two_ files: `docs/migration.md` (human-readable) and `docs/migration-SKILL.md` (LLM-optimized with before/after code examples). This is a clever pattern — they've anticipated that Claude will be both a contributor and a consumer of their documentation.
-
-- **Filtered commands.** `pnpm build:all` for everything, `--filter` for targeting specific packages. Simple, but it means Claude can scope its work precisely.
-
-### Example 3: Small Single-Package Project
-
-For smaller projects, you need even less. Here's a pattern distilled from several effective single-package CLAUDE.md files:
+For smaller projects, you need far less. Here's a pattern distilled from several effective single-package CLAUDE.md files:
 
 ```markdown
 ## Project
 
 Astro 5 blog with Tailwind CSS 4 and TypeScript.
-
-## Stack
-
-- Node 22, pnpm
-- Astro 5 framework
-- Tailwind CSS 4
-- TypeScript strict mode
 
 ## Commands
 
@@ -209,7 +265,7 @@ Run in this order:
 3. `pnpm run type-check`
 ```
 
-That's ~30 lines. It's enough for Claude to be productive without any hand-holding.
+That's ~25 lines. Enough for Claude to be productive without any hand-holding.
 
 ## Monorepo vs. Single Package: How to Scope
 
