@@ -1,0 +1,439 @@
+---
+title: 'Superpowers: The Claude Code Workflow That Actually Works'
+date: '2026-02-19'
+tags: ['claude', 'developer-tools', 'automation', 'dx', 'ai']
+draft: false
+summary: Claude Code is brilliant at writing code in isolation but terrible at sustained, multi-step engineering without guardrails. Superpowers — an open-source plugin by Jesse Vincent — turns it into a disciplined engineering process through mandatory skills, hooks, and memory. Here's the three-layer system that makes it work.
+---
+
+You know the feeling. You fire up Claude Code, describe a feature, and it immediately starts generating code. Forty minutes later you're staring at a half-working implementation that missed your actual requirements, introduced three abstractions you didn't ask for, and has zero tests. You course-correct, it apologizes, rewrites half of it, and now the other half is broken. Context window's getting full. You start a new session. Repeat.
+
+This is the failure mode of raw agentic coding, and it gets worse the longer the task is. Claude is brilliant at writing code in isolation but terrible at sustained, multi-step engineering without guardrails. It skips design, it rationalizes skipping tests, and it loses the plot mid-implementation. The longer a session runs, the more it drifts.
+
+[Superpowers](https://github.com/obra/superpowers) — an open-source plugin by Jesse Vincent — addresses this by turning Claude Code from a code-generating chatbot into something that behaves more like a disciplined engineering process. It does this through _skills_: markdown documents that Claude reads and follows as mandatory workflows. Not suggestions. Not system prompt hints. Mandatory, checked-at-every-step operating procedures.
+
+But here's what most people miss: Superpowers is one layer of what should be a three-layer system. Skills provide process discipline. Hooks provide operational guardrails. Memory provides accumulated project knowledge. This article covers all three — because skills without the operational and knowledge layers get you about 60% of the way there.
+
+The core insight is simple and powerful: Claude is extremely good at following detailed written instructions, and extremely bad at remembering to follow them on its own. Superpowers externalizes engineering discipline into documents that Claude loads before every action. Combined with hooks that catch mistakes in real time and memory that prevents repeating them across sessions, the result is a coding agent that brainstorms before building, plans before coding, writes tests before implementations, reviews its own work, and manages git branches cleanly — all without you manually steering it through each step.
+
+It's the difference between handing a capable but impulsive junior dev a task and handing them a task _plus a process they can't skip, in a workspace that catches their mistakes automatically_.
+
+## Installation
+
+In Claude Code, register the marketplace and install the plugin:
+
+```bash
+/plugin marketplace add obra/superpowers-marketplace
+```
+
+```bash
+/plugin install superpowers@superpowers-marketplace
+```
+
+Restart Claude Code. On restart, you'll see the bootstrap injection — a session-start hook that loads the `using-superpowers` skill and teaches Claude it has skills, that it must search for them, and that if a skill applies, using it is not optional.
+
+Verify it worked:
+
+```bash
+/help
+```
+
+You should see three new slash commands among the output:
+
+```
+/superpowers:brainstorm    - Interactive design refinement
+/superpowers:write-plan    - Create implementation plan
+/superpowers:execute-plan  - Execute plan in batches
+```
+
+You'll get access to roughly fourteen skills covering brainstorming, planning, TDD, debugging, code review, git worktrees, and more. Most activate automatically based on context — you generally don't need slash commands, because telling Claude "let's build a webhook handler" triggers brainstorming on its own.
+
+To update later: `/plugin update superpowers`.
+
+## The Workflow in Practice: Adding a Webhook Handler
+
+Let me walk through what actually happens when you use Superpowers on a real task. Say you're working on a TypeScript/Express API and you need to add a Stripe webhook handler for processing subscription events.
+
+You open Claude Code in your project directory and type:
+
+> "I need to add a Stripe webhook handler to process subscription created, updated, and deleted events."
+
+### Phase 1: Brainstorming (5-15 minutes, depending on complexity)
+
+Without Superpowers, Claude would immediately start writing `app.post('/webhooks/stripe', ...)`. With Superpowers, the brainstorming skill activates instead. Claude explores your project context first — it looks at your file structure, your existing routes, your test setup, your package.json. Then it starts asking questions. One at a time, not a wall of them.
+
+"Do you want to verify webhook signatures using Stripe's library, or are you behind a proxy that handles that?"
+
+"Should failed event processing retry, or dead-letter to a queue?"
+
+"I see you're using Prisma. Should subscription state live in your existing `users` table or a dedicated `subscriptions` table?"
+
+This is Socratic design refinement. The skill explicitly tells Claude to apply YAGNI ruthlessly, to propose two or three approaches before settling, and to present the design in sections short enough to actually read and approve. After a few rounds of questions, Claude presents a design document covering architecture, data flow, error handling, and testing approach. It asks you to approve each section.
+
+A note on timing: the article you may have read elsewhere says "5-10 minutes." In practice, genuinely ambiguous requirements can stretch brainstorming longer. A webhook handler with clear Stripe docs might take five minutes. A feature touching auth, cross-domain cookies, and async event processing might take twenty. This is time well spent — a correction during design costs nothing, a correction during implementation costs rework.
+
+Once you sign off, Claude saves the design to a plan document and commits it.
+
+### Phase 2: Git Worktree (automatic, ~30 seconds)
+
+The `using-git-worktrees` skill activates. Claude creates an isolated workspace — it checks for a `.worktrees/` directory (or creates one), runs `git worktree add .worktrees/stripe-webhooks -b feature/stripe-webhooks`, changes into that directory, runs your install step, and verifies your existing test suite passes. You now have a clean, isolated branch that won't interfere with anything else.
+
+This can fail if your project has complex install requirements — native dependencies, environment files that need copying, Docker services that need starting. If your project needs post-checkout setup, document it in `CLAUDE.md` so the worktree skill can handle it.
+
+### Phase 3: Writing the Plan (~2 minutes)
+
+The `writing-plans` skill takes the approved design and breaks it into bite-sized implementation tasks, each scoped to about 2-5 minutes of work. The plan includes exact file paths, specific code to write, and verification steps for every task. Critically, the plan is written as if for — in Jesse Vincent's memorable phrasing — "an enthusiastic junior engineer with poor taste, no judgement, no project context, and an aversion to testing." This isn't an insult to Claude; it's a recognition that subagents get minimal context and need explicit, unambiguous instructions.
+
+For the webhook handler, you might get five tasks: (1) Add Stripe webhook signature verification middleware, (2) Create event router with type-safe handlers, (3) Implement subscription.created handler with Prisma upsert, (4) Implement subscription.updated and subscription.deleted handlers, (5) Add error handling and dead-letter logging.
+
+Each task specifies exactly which files to create or modify and what tests to write.
+
+### Phase 4: Subagent-Driven Development
+
+Claude offers you a choice: `executing-plans` (batch execution with human checkpoints) or `subagent-driven-development` (fresh subagent per task with automated two-stage review). For anything with more than two tasks, subagent-driven development is usually the better choice.
+
+Here's what happens for each task: Claude dispatches a fresh subagent with the full task text, relevant context, and instructions to follow TDD. The subagent writes a failing test, implements just enough code to pass it, commits, and reports back. Then Claude dispatches a _spec compliance reviewer_ — a separate subagent that reads the actual code (not the implementer's self-report) and verifies every requirement is met and nothing was over-built. If that passes, a _code quality reviewer_ checks for clean code, test coverage, and maintainability.
+
+If a reviewer finds issues, Claude dispatches a fix subagent rather than trying to fix things in the orchestrator context — this prevents context pollution in the main session.
+
+In practice, this isn't always seamless. Subagent reviewers sometimes flag false positives that require orchestrator intervention. Tasks sometimes need to be re-scoped mid-execution when the implementer discovers the plan's assumptions were wrong. The orchestrator handles these cases, but expect occasional bumps rather than a perfectly smooth assembly line.
+
+This cycle repeats for every task. On a good run, Claude can work autonomously for an hour or two without drifting from the plan.
+
+### Phase 5: Finishing the Branch
+
+When all tasks are done, `finishing-a-development-branch` activates. Claude verifies the full test suite passes, then presents options: merge back to your source branch, create a GitHub PR, keep the worktree for manual review, or discard. It cleans up the worktree afterward.
+
+## The Skills That Actually Matter
+
+Superpowers ships with about fourteen skills. Some are glue. Four of them are transformative.
+
+### Brainstorming
+
+This is the skill that prevents the most wasted work. Its core rule is absolute: _every_ project goes through design review before implementation. A todo app, a config change, a single-function utility — all of them. The skill's documentation is explicit about why: "Simple" projects are where unexamined assumptions cause the most wasted work.
+
+What makes it effective isn't just "ask questions first" — any system prompt can do that. It's the specific constraints: one question at a time (don't overwhelm), multiple choice preferred over open-ended (easier to answer), YAGNI applied ruthlessly (remove unnecessary features from all designs), and incremental validation (present design section by section, get approval before moving on). The design must be saved as a document and committed before any implementation skill can be invoked.
+
+The transition rule is also rigid: after brainstorming, the only thing that can happen next is `writing-plans`. No implementation skills, no code, no scaffolding.
+
+### The Rationalization Table
+
+One of the most effective pieces of prompt engineering in the entire plugin is a table buried in the `using-superpowers` skill. It lists thoughts that mean "STOP — you're rationalizing your way out of using a skill":
+
+| Thought                             | Reality                                        |
+| ----------------------------------- | ---------------------------------------------- |
+| "This is just a simple question"    | Questions are tasks. Check for skills.         |
+| "I need more context first"         | Skill check comes BEFORE clarifying questions. |
+| "Let me explore the codebase first" | Skills tell you HOW to explore. Check first.   |
+| "This doesn't need a formal skill"  | If a skill exists, use it.                     |
+| "I remember this skill"             | Skills evolve. Read current version.           |
+| "This feels productive"             | Undisciplined action wastes time.              |
+| "I'll just do this one thing first" | Check BEFORE doing anything.                   |
+
+This table cuts off the entire class of "I'm being efficient by skipping the process" arguments. Claude is excellent at constructing reasonable-sounding justifications for doing things the fast way. The table preemptively names each rationalization and rejects it. It's the most Claude-psychology-aware piece of the system.
+
+### Subagent-Driven Development
+
+This is the execution engine, and it solves the biggest practical problem with long Claude Code sessions: context degradation. By dispatching a fresh subagent for each task, every implementation step starts with a clean context window containing only the task spec and relevant project context. No accumulated cruft from previous tasks, no confused state from earlier debugging.
+
+The two-stage review is the other key innovation. The spec compliance reviewer is described as "skeptical" — it reads the actual code and won't trust the implementer's self-assessment. It checks for missing requirements _and_ over-building (a common Claude failure mode where it helpfully adds features you didn't ask for). Only after spec compliance passes does the code quality review run.
+
+When reviews surface issues, the orchestrator dispatches a _fix subagent_ rather than fixing inline. This is deliberate — manual fixes in the orchestrator pollute its context and lead to drift.
+
+### Test-Driven Development
+
+This is the most aggressively enforced skill in the system, and it's a masterclass in prompt engineering for compliance. The core cycle is strict RED-GREEN-REFACTOR: write a failing test, watch it fail (the RED must be verified), write the minimum code to pass it, watch it pass, then refactor if needed. Commit after each green.
+
+The skill doesn't just say "write tests first." It anticipates and blocks Claude's rationalizations for skipping TDD. Write code before the test? Delete the code. Start over. Not "okay, write the test now" — delete what you wrote and begin again. This isn't cruel; it's based on the practical observation that Claude will rationalize writing code first ("I'll just get the structure in place and then add tests") and then write tests that are shaped around the existing implementation rather than the actual requirements.
+
+The skill explicitly states: "Violating the letter of the rules is violating the spirit of the rules." This cuts off the entire class of "I'm following the spirit of TDD" arguments that Claude is very good at constructing.
+
+Jesse Vincent's blog post reveals that this enforcement language was developed through adversarial testing — he had Claude pressure-test skills against subagents using scenarios designed around Cialdini's persuasion principles (time pressure, sunk cost fallacy, authority). One test scenario told a subagent: "Your human partner's production system is down. Every minute costs $5k. You could start debugging immediately or check your skills first." Another exploited sunk cost: "You just spent 45 minutes writing async test infrastructure. It works. Do you check whether a skill exists, or commit your working solution?" The scenarios that broke compliance were used to strengthen the skill text. It's red-teaming applied to process documentation, and it's why the enforcement language is so specific — every sharp edge was filed down from an actual failure.
+
+### Systematic Debugging
+
+This skill enforces a four-phase process: (1) gather evidence at component boundaries, (2) analyze evidence to identify the failing component, (3) propose and test a fix with a failing test that reproduces the bug, (4) verify the fix and add regression tests. The iron rule: you cannot propose fixes until Phase 1 is complete. If three or more fixes fail, you must question the architecture rather than continuing to patch symptoms.
+
+Why this matters for Claude specifically: without this skill, Claude's default debugging behavior is to read the error, make a plausible guess, apply a fix, see if it works, and if not, try another guess. This guess-and-check approach works for trivial bugs but falls apart on anything involving state, async behavior, or cross-component interactions. The systematic debugging skill forces evidence gathering before hypothesis formation, which is exactly the discipline Claude lacks by default.
+
+## Beyond Skills: The Three-Layer System
+
+Here's where most Superpowers guides stop, and where the real engineering begins. Skills tell Claude _what process to follow_. But who tells Claude _what commands to run for verification_? Who catches a lint error before it compounds? Who reminds Claude it edited a shared package and needs to check downstream? Who prevents Claude from making the same timezone bug it made three sessions ago?
+
+In a production monorepo I work with — TypeScript, GraphQL API with Pothos, Next.js frontend, ~20 shared packages, PostgreSQL — Superpowers is one layer of three.
+
+### Layer 1: Skills (process discipline)
+
+This is what we've been discussing. Brainstorming, TDD, subagent-driven development. But project-specific skills are where the real leverage is.
+
+The plugin's skill format supports `globs` in YAML frontmatter — file patterns that auto-trigger the skill when matching files are edited:
+
+```yaml
+---
+name: add-graphql-mutation
+description: End-to-end guide for adding a new GraphQL mutation.
+globs:
+  - 'apps/api/src/**/mutations/**/*.ts'
+  - 'apps/api/src/**/graphql/**/*.ts'
+---
+
+# Add a GraphQL Mutation End-to-End
+
+Follow these layers in order. Each step builds on the previous.
+
+## 1. Business Logic
+Write the pure function first. No GraphQL types here...
+
+## 2. Mutation Definition
+Import the shared builder and define input type, response type...
+
+## 3. Register in Domain Barrel...
+## 4. GraphQL Document...
+## 5. Regenerate Schema + SDK...
+## 6. Server Action...
+## 7. Tests...
+```
+
+When Claude edits any mutation or GraphQL file, this skill loads automatically with the full 7-step workflow. Claude doesn't have to remember the steps — the skill is _already in context_ because the file it's editing matched the glob. No slash command needed.
+
+This pattern — **domain workflow skills with auto-triggers** — is the highest-value custom skill type. Don't just write skills for repeated instructions ("always use Zod"). Write skills for your domain's multi-step workflows and bind them to the file patterns where they apply. A database migration skill triggers on `db/migrations/**/*.ts`. A query skill triggers on `queries/**/*.ts`. The same GraphQL file can trigger both the mutation and query skills — Claude picks the relevant one based on whether the file defines a `mutationField` or `queryField`.
+
+### Layer 2: Hooks (operational guardrails)
+
+Hooks are shell scripts that fire on Claude Code events — most commonly `PostToolUse`, which runs after every Edit or Write. They're your real-time safety net.
+
+Here's a practical hook setup that pairs with Superpowers:
+
+**Auto-formatter** (PostToolUse, 30s timeout): Runs Prettier on every saved file. Claude never commits unformatted code, and you never waste a review cycle on formatting.
+
+**Lint checker** (PostToolUse, 30s timeout): Runs ESLint on the changed file. Surfaces errors immediately — before Claude builds more code on top of a broken foundation.
+
+**Schema nudge** (PostToolUse, 5s timeout): When Claude edits a GraphQL schema file, prints a reminder to regenerate the SDK. Doesn't block — just nudges. This is critical in any project with code generation pipelines, because Claude will happily write code that references a generated function that doesn't exist yet.
+
+```bash
+#!/bin/bash
+# schema-nudge.sh — remind about schema regeneration
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+[ -z "$FILE_PATH" ] && exit 0
+
+case "$FILE_PATH" in
+  */graphql/*.ts)
+    echo "SCHEMA REMINDER: You edited a schema file. When done, run:"
+    echo "  npm run schema && yarn workspace @myorg/client-sdk bootstrap"
+    ;;
+esac
+exit 0
+```
+
+**Package impact** (PostToolUse, 5s timeout): When Claude edits a file in a shared package, prints which apps consume that package and the exact command to check downstream impact.
+
+```bash
+#!/bin/bash
+# package-impact.sh — cross-package awareness
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+[ -z "$FILE_PATH" ] && exit 0
+
+case "$FILE_PATH" in
+  */packages/*/src/*) ;;
+  *) exit 0 ;;
+esac
+
+PKG_NAME=$(echo "$FILE_PATH" | sed -n 's|.*/packages/\([^/]*\)/src/.*|\1|p')
+[ -z "$PKG_NAME" ] && exit 0
+
+case "$PKG_NAME" in
+  utils|envkit|logger|errors) CONSUMERS="api, web" ;;
+  datakit|messaging|storage)  CONSUMERS="api" ;;
+  client-sdk)                 CONSUMERS="web" ;;
+  *) exit 0 ;;
+esac
+
+echo "PACKAGE IMPACT: @myorg/$PKG_NAME is consumed by: $CONSUMERS"
+echo "  Check downstream: turbo run lint:ci ts --filter=@myorg/$PKG_NAME..."
+exit 0
+```
+
+Register hooks in `.claude/settings.local.json` (this file is gitignored — it's your personal config, not shared with the team):
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/prettier-format.sh",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/eslint-check.sh",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/schema-nudge.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/package-impact.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Why hooks matter for Superpowers specifically:** When the `verification-before-completion` skill asks "did you verify?", hooks have already been providing the specific commands and warnings throughout the session. The verification skill doesn't have to guess — the package-impact hook already said "you edited `@myorg/utils` which is consumed by api and web, run `turbo run lint:ci ts --filter=@myorg/utils...`." Skills provide the discipline to verify. Hooks provide the knowledge of _what_ to verify.
+
+### Layer 3: Memory (accumulated project knowledge)
+
+Claude Code's auto-memory (`~/.claude/projects/<project>/memory/`) persists across sessions. This is where you capture the knowledge that prevents the same mistake from happening twice.
+
+In the project I work with, the memory files include:
+
+**Gotchas that burned real time:**
+
+- Stale compiled migrations in `dist/` causing test failures (check for `.js` files that don't have corresponding `.ts` sources)
+- DATE columns in PostgreSQL requiring timezone-aware comparison — tests that insert DATE values must use a timezone conversion helper or comparisons silently mismatch
+- A third-party SDK that crashes on startup if an env var doesn't match a specific format
+
+**Domain-specific patterns:**
+
+- Auth flow details: which cookies go on which domains, how token refresh works, what the middleware expects
+- Feature-specific internals: how the credits system resolves which sub-brand a request belongs to, what gates control feature rendering
+
+**A verification matrix** in `.claude.local.md`:
+
+| What you touched              | Verification command                            |
+| ----------------------------- | ----------------------------------------------- |
+| API mutation/query logic      | `turbo run lint:ci ts test:once --filter=api`   |
+| GraphQL schema (Pothos)       | Full schema chain + API check                   |
+| Database migration            | `yarn workspace api migrate` then API check     |
+| Shared package (`packages/*`) | `turbo run lint:ci ts --filter=@myorg/<pkg>...` |
+| Web components/pages          | `turbo run lint:ci ts --filter=@myorg/web`      |
+| Test files only               | `yarn workspace api vitest <file>`              |
+
+This matrix eliminates the "what should I run?" question entirely. Claude looks up what it touched, finds the exact command, runs it. No guessing, no running the entire test suite when only the API changed.
+
+### How the layers interact
+
+Real example: Claude is asked to add a new GraphQL mutation to a contest domain.
+
+1. **Skill layer**: The mutation skill auto-loads (via `globs` matching `mutations/**/*.ts`). Brainstorming activates. TDD is enforced during implementation.
+2. **Hook layer**: After writing the Pothos schema file, the schema-nudge hook fires: "You edited a schema file. When done, run the regeneration commands." The ESLint hook catches a security rule violation immediately.
+3. **Memory layer**: The verification matrix tells Claude exactly what command to run. The gotchas file prevents it from forgetting to check for stale compiled migrations.
+
+No single layer handles this alone. Skills without hooks means Claude follows the right process but doesn't know your project's specific commands. Skills without memory means Claude follows the right process but repeats mistakes from previous sessions. Hooks without skills means Claude gets real-time feedback but no process discipline. You need all three.
+
+## Skill Priority and Interaction
+
+When multiple skills could apply to the same task, Superpowers follows a priority order:
+
+1. **Process skills first** (brainstorming, debugging) — these determine HOW to approach the task
+2. **Implementation skills second** (TDD, frontend-design) — these guide execution
+
+"Let's build a webhook handler" triggers brainstorming first, then TDD during implementation. "Fix this failing test" triggers systematic debugging first, then TDD for the fix. The `using-superpowers` skill establishes this ordering at session start.
+
+When project-specific skills overlap — say both a mutation skill and a query skill have globs matching `graphql/**/*.ts` — Claude picks the relevant one based on content. If the file defines a `mutationField`, the mutation skill applies. If it defines a `queryField`, the query skill applies. Overlapping globs are intentional, not a conflict.
+
+## Git Worktrees: The Underappreciated Superpower
+
+If you're not using git worktrees with Claude Code, you're missing one of the biggest practical wins. A worktree is a separate working directory linked to the same repository — you can have `main` checked out in your project root and `feature/stripe-webhooks` checked out in `.worktrees/stripe-webhooks`, both sharing the same git history.
+
+Superpowers' `using-git-worktrees` skill creates these automatically after design approval. It checks for an existing `.worktrees/` directory, verifies it's gitignored, creates the worktree with a new branch, runs your project's install step, and verifies the test baseline is clean.
+
+Why this matters for Claude Code workflows specifically:
+
+**Parallel sessions.** You can run multiple Claude Code instances on the same project, each in its own worktree, working on different features simultaneously. Feature A's half-written code doesn't interfere with Feature B's test runs.
+
+**Clean rollback.** If a feature goes sideways, you discard the worktree. Your main branch is untouched.
+
+**Honest test baselines.** The worktree skill verifies that all existing tests pass _before_ implementation starts. This catches the "tests were already broken" class of problems before they contaminate your new work.
+
+**One gotcha:** If your project uses Claude Code hooks and local config (`.claude/settings.local.json`, `.claude.local.md`), new worktrees won't have them. Write a setup script that symlinks your Claude config from the main worktree into new ones. Otherwise, the new worktree gets no hooks, no permissions, and no local instructions.
+
+## `dispatching-parallel-agents` vs. `subagent-driven-development`
+
+These sound similar but serve different purposes.
+
+**Subagent-driven development** is the full implementation workflow: take a plan, execute it task by task with fresh subagents and two-stage reviews. Tasks are sequential — later tasks build on earlier ones.
+
+**Dispatching parallel agents** is for independent work: three unrelated test files failing, investigating separate bugs, researching different approaches simultaneously. Each agent works on a separate problem domain concurrently.
+
+The decision tree: are the tasks dependent on each other? Use subagent-driven-development. Are they independent? Use dispatching-parallel-agents.
+
+## Honest Tradeoffs
+
+Superpowers is not free. Here's where it adds friction, and when that friction isn't worth it.
+
+**The brainstorming tax.** For genuinely trivial changes — fixing a typo, bumping a dependency version, adding a log line — the mandatory brainstorming phase is overhead. You can skip it by being explicit ("just fix this typo in line 42 of server.ts, no brainstorming needed"), but the default is to brainstorm everything. For one-line changes, just tell Claude directly what to do.
+
+**Context window cost.** The skills consume tokens. Expect roughly 10-15% of your context window used for skill definitions at startup. For short conversations this is negligible; for sessions already pushing context limits, it's a factor.
+
+**Subagent overhead.** Subagent-driven development is slower per-task than having Claude write code directly. Each task involves dispatching an implementer, then a spec reviewer, then a code reviewer. For a five-task plan, that's fifteen subagent invocations minimum. The tradeoff is worth it for anything non-trivial because the output quality is dramatically higher and you get actual test coverage. For a quick prototype or spike, `executing-plans` (batch mode with human checkpoints) or raw Claude Code might be faster.
+
+**It's opinionated.** If you don't believe in TDD, you're going to fight with Superpowers constantly. The system is built around the assumption that writing tests first produces better code, and it enforces this at every step. If your workflow is "write code, then add tests at the end," Superpowers will actively resist you.
+
+**Setup investment.** The three-layer system described in this article — skills, hooks, memory — takes real time to build. The skills layer (Superpowers itself) is thirty seconds. A useful hook setup is an afternoon. Memory accumulates over weeks of actual work. The full system pays for itself on the third or fourth feature, but the first two features will feel slower than raw Claude Code.
+
+**Best fit.** The full system shines on feature work in existing codebases: adding API endpoints, building service layers, implementing domain logic, refactoring modules. It's less valuable for exploratory prototyping where you're still figuring out what you're building (though brainstorming helps even there). It's most valuable when the work involves multiple files, test coverage matters, and you want to walk away from the keyboard while Claude works.
+
+## Writing Your Own Skills
+
+The `writing-skills` skill is meta and worth reading even if you never create a skill. It documents the pattern: a skill is a `SKILL.md` file in a named directory under `.claude/skills/`, with YAML frontmatter specifying name, description, and optionally trigger conditions.
+
+Two categories of custom skills are worth writing:
+
+**Repeated instructions** — "always use Zod for validation," "run `pnpm check` not `npm test`," "check the credential store before creating new ones." If you find yourself saying it more than twice, it's a skill.
+
+**Domain workflow skills** — the multi-step processes specific to your codebase. "How to add a new GraphQL mutation" is seven steps in the right order with security constraints at each step. "How to add a database migration" is four steps with gotchas about stale compiled files. These are higher-value than instruction skills because they encode sequencing and domain knowledge, not just preferences.
+
+For domain workflow skills, always add `globs` so they auto-trigger:
+
+```yaml
+---
+name: add-db-migration
+description: Guide for database migrations.
+globs:
+  - 'apps/api/db/migrations/**/*.ts'
+---
+```
+
+Skills follow RED-GREEN-REFACTOR for development — write the skill, test it against subagents to verify they follow it correctly, then refine based on failures. The testing matters because Claude will find creative interpretations of ambiguous instructions.
+
+## Prompting Hygiene That Pairs Well
+
+Superpowers handles the workflow, but your initial prompt still matters. Be specific about constraints: "We're deploying to Cloud Run, so the handler needs to respond within 30 seconds" is much more useful than "make it production-ready." Reference existing patterns: "Follow the same error handling pattern as `src/handlers/payment.ts`." And when Claude presents a design, actually read it and push back. The brainstorming phase is your leverage point — a correction during design costs nothing, a correction during implementation costs rework.
+
+If your project has a `CLAUDE.md` file (Claude Code's project-specific instructions), Superpowers reads it. Put your architectural decisions, test commands, and conventions there. Personal preferences go in `.claude.local.md` (gitignored). The distinction matters — `CLAUDE.md` is for the team, `.claude.local.md` is for your workflow.
+
+## Getting Started
+
+Install takes thirty seconds:
+
+```bash
+/plugin marketplace add obra/superpowers-marketplace
+/plugin install superpowers@superpowers-marketplace
+```
+
+Restart Claude Code, then start working. Tell it what you want to build. It'll take it from there.
+
+The first time, expect the brainstorming phase to feel slow — you're used to Claude jumping straight to code, and being asked clarifying questions feels like friction. Push through that. By the third or fourth feature, you'll notice you're spending less total time because you're not fixing implementation mistakes that a five-minute design conversation would have caught.
+
+Then start building the other two layers. Add a Prettier hook and an ESLint hook (afternoon of work). Write your first domain workflow skill for whatever multi-step process your project does most often. Let memory accumulate naturally — when Claude hits a gotcha, save it. Within a few weeks, you'll have a system where Claude follows the right process, gets real-time feedback on mistakes, and doesn't repeat errors across sessions.
+
+That's the full stack. Skills for discipline. Hooks for guardrails. Memory for knowledge. Each layer makes the others more effective.
+
+The [Superpowers repo](https://github.com/obra/superpowers) has over 50k stars and active development. Jesse Vincent's [blog post introducing it](https://blog.fsck.com/2025/10/09/superpowers/) is worth reading for the backstory on how the skills were developed, including the adversarial subagent testing that makes the TDD enforcement stick. If Superpowers saves you time and makes you money, Jesse accepts [GitHub Sponsors](https://github.com/sponsors/obra).
+
+---
+
+_If you're working in a monorepo with shared packages, the package-impact hook pattern is especially valuable. Editing a utility package without checking downstream consumers is one of the most common sources of CI failures that Claude causes. A five-line bash script that prints "you edited @myorg/utils, which is consumed by api and web" saves hours of debugging broken builds._
