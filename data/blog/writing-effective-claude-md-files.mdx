@@ -24,12 +24,12 @@ Think of it as onboarding documentation for a new developer who is extremely cap
 
 Claude Code loads CLAUDE.md files from multiple locations in a specific order of precedence:
 
-| Location | Scope | Checked into git? |
-| --- | --- | --- |
-| `~/.claude/CLAUDE.md` | All projects (global) | No |
-| `CLAUDE.md` (project root) | Whole team, this repo | Yes |
-| `CLAUDE.local.md` (project root) | Just you, this repo | No (gitignored) |
-| `packages/api/CLAUDE.md` | Subdirectory-scoped | Yes |
+| Location                         | Scope                 | Checked into git? |
+| -------------------------------- | --------------------- | ----------------- |
+| `~/.claude/CLAUDE.md`            | All projects (global) | No                |
+| `CLAUDE.md` (project root)       | Whole team, this repo | Yes               |
+| `CLAUDE.local.md` (project root) | Just you, this repo   | No (gitignored)   |
+| `packages/api/CLAUDE.md`         | Subdirectory-scoped   | Yes               |
 
 **How loading works:** Ancestor files (above your working directory) load eagerly at startup. Descendant files (in subdirectories below) load lazily — only when Claude reads files in that directory. This means in a monorepo, the frontend team's instructions don't consume tokens until Claude actually touches frontend code.
 
@@ -89,7 +89,7 @@ Document the _why_, not the _what_. Claude can read your code to see what you di
 - Database access goes through repository classes only — never raw SQL in handlers
 - Feature flags via LaunchDarkly SDK — check before using environment variables
 - All API responses use the Result<T, E> wrapper from @acme/core/types
-- Internal package dependencies use workspace:* protocol
+- Internal package dependencies use workspace:\* protocol
 ```
 
 ### 4. Common Mistakes (the Feedback Flywheel)
@@ -113,10 +113,12 @@ Tell Claude _when_ to verify, not just _how_. This section is the bridge between
 ## Verification
 
 After completing any unit of work:
+
 1. `pnpm --filter <affected-package> typecheck`
 2. `pnpm --filter <affected-package> test`
 
 Before claiming a task is complete:
+
 1. `pnpm lint && pnpm typecheck`
 2. All tests pass
 ```
@@ -174,14 +176,17 @@ For detailed guidance on writing and reviewing code and documentation,
 see the skills in .claude/skills/:
 
 ## Clojure
+
 - clojure-write - Clojure/ClojureScript development with REPL-driven workflow
 - clojure-review - Clojure/ClojureScript code review guidelines
 
 ## TypeScript
+
 - typescript-write - TypeScript/JavaScript development and best practices
 - typescript-review - TypeScript/JavaScript code review guidelines
 
 ## Documentation
+
 - docs-write - Documentation writing with Metabase style guide
 - docs-review - Documentation review checklist
 
@@ -222,14 +227,14 @@ Note the graduated emphasis: plain text for standard rules, IMPORTANT for strong
 The [supabase-js](https://github.com/supabase/supabase-js) repository is an Nx monorepo containing six packages. Their CLAUDE.md demonstrates how to document environment-dependent commands:
 
 ```markdown
-| Package      | Docker | Complete Test Command              |
-|--------------|--------|------------------------------------|
-| auth-js      | ✅     | `nx test:auth auth-js`             |
-| storage-js   | ✅     | `nx test:storage storage-js`       |
-| postgrest-js | ✅     | `nx test:ci:postgrest postgrest-js`|
-| functions-js | ✅     | `nx test functions-js`             |
-| realtime-js  | ❌     | `nx test realtime-js`              |
-| supabase-js  | ❌     | `nx test supabase-js`              |
+| Package      | Docker | Complete Test Command               |
+| ------------ | ------ | ----------------------------------- |
+| auth-js      | ✅     | `nx test:auth auth-js`              |
+| storage-js   | ✅     | `nx test:storage storage-js`        |
+| postgrest-js | ✅     | `nx test:ci:postgrest postgrest-js` |
+| functions-js | ✅     | `nx test functions-js`              |
+| realtime-js  | ❌     | `nx test realtime-js`               |
+| supabase-js  | ❌     | `nx test supabase-js`               |
 ```
 
 They also list exact valid commit scopes (`auth, functions, postgrest, realtime, storage, supabase, repo, deps, ci, release, docs, scripts, misc`) and a concrete anti-patterns section. The pattern of specifying which tests need Docker and which don't saves Claude from trial-and-error that would burn through context.
@@ -260,6 +265,7 @@ Astro 5 blog with Tailwind CSS 4 and TypeScript.
 ## After Completing Any Task
 
 Run in this order:
+
 1. `pnpm run format`
 2. `pnpm run lint`
 3. `pnpm run type-check`
@@ -370,10 +376,11 @@ The key feature: **path-specific conditional rules**. Add a `paths` frontmatter 
 ```markdown
 ---
 paths:
-  - "src/api/**/*.ts"
+  - 'src/api/**/*.ts'
 ---
 
 # API Development Rules
+
 - All endpoints must include input validation using zod schemas
 - Use the standard error response format from src/lib/errors.ts
 - Integration tests required for any new endpoint
@@ -393,6 +400,7 @@ This is where most people go wrong. Here are the most common mistakes, ranked by
 
 ```markdown
 # ❌ Don't put this in CLAUDE.md
+
 - Use 2-space indentation
 - Always use semicolons
 - Prefer single quotes over double quotes
@@ -400,6 +408,7 @@ This is where most people go wrong. Here are the most common mistakes, ranked by
 - Use trailing commas in multi-line arrays
 
 # ✅ Instead, use a PostToolUse hook that runs your formatter
+
 # Claude gets instant feedback on every edit — no instructions needed
 ```
 
@@ -424,11 +433,13 @@ Claude knows how TypeScript works. It knows how React hooks work. It knows what 
 
 ```markdown
 # ❌ Don't
+
 - Use async/await instead of raw promises
 - React components should be functional, not class-based
 - Use TypeScript generics for type-safe collections
 
 # ✅ Do (only document what's specific to YOUR project)
+
 - Use the AsyncResult<T> wrapper from @acme/core — not raw promises
 ```
 
@@ -438,9 +449,11 @@ Telling Claude "never do X" leaves it stuck. Always provide the alternative.
 
 ```markdown
 # ❌ Don't
+
 - Never use the --force flag
 
 # ✅ Do
+
 - Never use git push --force; use git push --force-with-lease instead
 ```
 
@@ -452,7 +465,9 @@ If you find yourself writing more than 200 lines, you're writing documentation, 
 # ❌ Don't: 500-line CLAUDE.md with every API endpoint documented
 
 # ✅ Do: 5-line pointer
+
 ## API Documentation
+
 - Endpoint reference: see docs/api-reference.md
 - Auth flow: see docs/authentication.md
 - Error codes: see docs/error-handling.md
@@ -501,17 +516,19 @@ Skills are markdown files that Claude loads _on demand_ — invoked through slas
 │   └── debug-auth.md          # /debug-auth
 ```
 
-Rule of thumb: if it applies to >80% of sessions, put it in CLAUDE.md. If it applies to <20%, make it a skill. If it's somewhere in between, use a conditional rule with `paths` frontmatter in `.claude/rules/`.
+Rule of thumb: if it applies to &gt;80% of sessions, put it in CLAUDE.md. If it applies to &lt;20%, make it a skill. If it's somewhere in between, use a conditional rule with `paths` frontmatter in `.claude/rules/`.
 
 ## CLAUDE.md vs. CLAUDE.local.md
 
 Use `CLAUDE.md` (checked into git) for team-wide instructions:
+
 - Build and test commands
 - Architecture decisions
 - Commit conventions
 - Common mistakes
 
 Use `CLAUDE.local.md` (gitignored) for personal preferences:
+
 - Your preferred editor settings
 - Custom shortcuts or aliases
 - Personal verification workflows
@@ -557,10 +574,12 @@ Here's a template you can adapt. Delete sections that don't apply. Add specifics
 ## Verification
 
 After completing any unit of work:
+
 1. [Scoped type check command]
 2. [Scoped test command]
 
 Before claiming complete:
+
 1. [Full lint + type check]
 2. All tests pass
 ```
@@ -573,11 +592,11 @@ You may see some repositories (like Next.js) using `AGENTS.md` instead of `CLAUD
 
 Your CLAUDE.md is one layer in a three-layer system:
 
-| Layer | What it does | Enforcement |
-| --- | --- | --- |
-| **CLAUDE.md** | Provides context, conventions, and verification steps | Advisory — Claude _should_ follow |
-| **Hooks** | Auto-format, lint, codegen reminders on every edit | Deterministic — runs every time |
-| **Permissions** | Block destructive commands | Hard limit — can't be overridden |
+| Layer           | What it does                                          | Enforcement                       |
+| --------------- | ----------------------------------------------------- | --------------------------------- |
+| **CLAUDE.md**   | Provides context, conventions, and verification steps | Advisory — Claude _should_ follow |
+| **Hooks**       | Auto-format, lint, codegen reminders on every edit    | Deterministic — runs every time   |
+| **Permissions** | Block destructive commands                            | Hard limit — can't be overridden  |
 
 CLAUDE.md handles the things that require judgment — when to run which test suite, what architectural patterns to follow, which mistakes to avoid. Hooks handle the things that should happen mechanically on every edit. Permissions handle the things that should never happen at all.
 
