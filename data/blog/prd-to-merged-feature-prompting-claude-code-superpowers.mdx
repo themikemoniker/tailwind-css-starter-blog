@@ -1,0 +1,402 @@
+---
+title: 'From PRD to Merged Feature: Prompting Claude Code With Superpowers'
+date: '2026-02-19'
+tags: ['claude', 'developer-tools', 'automation', 'dx', 'ai']
+draft: false
+summary: The exact workflow for turning a PRD into working code with Claude Code and the Superpowers plugin — from writing your opening prompt through brainstorming, planning, execution, and a clean PR.
+---
+
+You have a PRD. Maybe it's a Linear ticket, maybe it's a Notion doc, maybe it's three paragraphs your PM sent on Slack. You need to turn it into working code — tested, reviewed, and on a clean branch ready for PR.
+
+This guide covers the exact workflow for doing that with Claude Code and the Superpowers plugin, from how to write your opening prompt through each phase of the process. The goal isn't to explain what Superpowers is (there's a [separate article for that](/blog/superpowers-claude-code-workflow)) — it's to show you how to drive it, when to intervene, and where most people lose time.
+
+## Before You Start
+
+### What you need
+
+- Claude Code with Superpowers installed and verified
+- A `CLAUDE.md` in your project root with build commands, test commands, and architectural conventions
+- Ideally: PostToolUse hooks for formatting and linting (so mistakes get caught in real time, not at the end)
+- Your dev environment running (database, local services, etc.)
+
+### What you should read first
+
+Read the PRD yourself. The single biggest time sink in this workflow is feeding Claude a PRD you haven't read and then discovering mid-implementation that the requirements are ambiguous, contradictory, or incomplete. You don't need to design the solution — that's what brainstorming is for — but you do need to know what's being asked.
+
+If the PRD has obvious gaps ("add authentication" with no mention of which auth method), note them. You'll feed those to Claude as constraints or open questions.
+
+## Phase 1: The Opening Prompt
+
+This is the most important prompt in the entire workflow. Everything downstream — brainstorming quality, plan accuracy, implementation correctness — depends on how you frame the task here.
+
+### The anatomy of a good opening prompt
+
+A good opening prompt has four parts:
+
+1. **What** — the feature, in your words (not just a link)
+2. **Where** — which parts of the codebase it touches
+3. **Constraints** — things the PRD implies but doesn't say
+4. **Open questions** — things you noticed are ambiguous
+
+### Bad prompt
+
+> "Implement ENG-1234"
+
+Claude has no context. Even if it can read the Linear ticket, it doesn't know your priorities, your constraints, or what you've already thought about. It'll brainstorm from scratch and ask questions you already know the answer to.
+
+### Okay prompt
+
+> "I need to add a webhook handler for Stripe subscription events. Here's the ticket: \[link\]. Please implement it."
+
+Better — Claude knows the domain. But "please implement it" invites it to skip brainstorming and jump to code. With Superpowers, brainstorming will still trigger, but the prompt's tone sets an expectation of speed that can make the design phase feel like friction rather than value.
+
+### Good prompt
+
+> "I need to add a Stripe webhook handler for subscription.created, subscription.updated, and subscription.deleted events.
+>
+> Context: We already have a payment processing module at src/payments/ with Stripe SDK configured. Webhook signature verification should use the existing Stripe client. Subscription state should probably live in the database but I'm open to approaches.
+>
+> Constraints: Must handle idempotency (Stripe sends duplicate events). Must not block the response — Stripe times out webhooks after 30 seconds. We're on Express with PostgreSQL.
+>
+> Open questions: Should we process events synchronously or queue them? The PRD doesn't specify error handling for malformed events."
+
+This prompt gives Claude everything it needs to have a productive brainstorming session. It won't waste rounds asking about the tech stack, the existing code structure, or the deployment constraints. Instead, it'll focus on the actual design decisions: sync vs. queue, error handling strategy, database schema for subscriptions.
+
+### Great prompt (for complex features)
+
+For larger features, paste or reference the PRD directly and add your commentary:
+
+> "Here's the PRD for the credits redemption system: \[paste or reference\]
+>
+> My read on this:
+>
+> - The core flow is: user earns credits via daily actions, redeems them for votes during contests
+> - The PRD says 'credits should be brand-specific' but doesn't define how brands are resolved — in our system, brand comes from the x-page-url header in the request
+> - There are three rendering gates mentioned (URL param, votes cast, lifetime credits) but the PRD doesn't specify what happens when only some gates are met
+> - I think we need a new database table for credit balances, keyed on userId + brandId
+>
+> Please brainstorm the design. I want to make sure we get the brand resolution and the rendering gates right before writing any code."
+
+This is the highest-leverage prompt pattern: PRD + your interpretation + specific concerns. Claude will validate your interpretation during brainstorming rather than building its own from scratch. The last sentence explicitly frames brainstorming as valuable, which prevents the "let me just start coding" drift.
+
+### Prompting from a Linear ticket
+
+If your PRD lives in a tool like Linear, you have two options:
+
+**Option A: Copy the description into your prompt.** More reliable — Claude has the full text in context. Add your commentary and constraints as shown above.
+
+**Option B: Have Claude read the ticket.** If you have MCP tools for your project management platform configured, Claude can read the ticket directly:
+
+> "Read Linear ticket ENG-1234 and brainstorm the implementation. The ticket is for adding daily credit earning to our contest platform.
+>
+> Additional context: credits table already exists (see src/credits/), the earning logic needs to be timezone-aware (EST), and the front-end gate checks are in the VIP page component."
+
+Option B is convenient but riskier — Claude may miss nuance in the ticket formatting, and you lose the opportunity to add your own interpretation upfront. For complex features, Option A is almost always better.
+
+## Phase 2: Brainstorming
+
+After your opening prompt, Superpowers' brainstorming skill activates automatically. Here's what to expect and how to steer it.
+
+### What happens
+
+Claude reads your project context (file structure, CLAUDE.md, existing code patterns) and starts asking clarifying questions, one at a time. It will:
+
+1. Confirm its understanding of the requirements
+2. Identify ambiguities and ask about them
+3. Propose approaches (usually two or three) with tradeoffs
+4. Present a design document section by section for your approval
+
+### How to steer it
+
+**Answer questions with constraints, not just preferences.** "Use approach A" is fine. "Use approach A because we need to support bulk operations later and B doesn't scale" is better — it gives Claude context for downstream decisions you haven't been asked about yet.
+
+**Push back on scope.** Claude will sometimes include things the PRD didn't ask for. If the brainstorming design includes "and we should also add an admin dashboard for viewing credits," that's scope creep. Say "remove the admin dashboard — that's a separate ticket."
+
+**Ask about what's missing.** If the design doesn't mention error handling, testing strategy, or migration plan, ask about them. "What happens if the Stripe webhook delivers an event for a subscription we don't have? What's the migration story for the new table?"
+
+**Approve section by section.** The brainstorming skill presents the design incrementally. Don't wait until the end to object — flag issues as each section is presented. A correction at section 2 is cheap. A correction after the full design is written means rework.
+
+### When brainstorming takes too long
+
+If you're past 15 minutes and the design isn't converging, it usually means one of three things:
+
+1. **The requirements are genuinely ambiguous.** Go back to the PRD owner and clarify. Claude can't resolve product ambiguity through engineering discussion.
+2. **You're over-designing.** "Let's keep the MVP scope and iterate" is a valid thing to say. Tell Claude to simplify.
+3. **Claude is exploring tangents.** Redirect: "Let's focus on the core flow first. We can handle \[edge case\] in a follow-up."
+
+### The brainstorming output
+
+When you approve the final design, Claude saves it as a document (usually in a `docs/plans/` directory) and commits it. This document becomes the source of truth for the rest of the workflow. If you later disagree with an implementation choice, you can point back to the design: "The design says sync processing, why did you queue this?"
+
+## Phase 3: Planning
+
+After brainstorming completes, the planning skill activates. Claude takes the approved design and breaks it into ordered implementation tasks.
+
+### What to look for
+
+**Task size.** Each task should be a small enough for a subagent to complete in one shot, large enough to be a meaningful unit. If you see a task like "Implement the entire credit system," it's too big. If you see "Add import statement for CreditModel," it's too small.
+
+**Task ordering.** Later tasks should build on earlier ones. Database schema before business logic. Business logic before API layer. API layer before frontend. If the order looks wrong, say so.
+
+**Test inclusion.** Every task should mention what tests to write. If a task says "implement the webhook handler" with no mention of tests, push back: "Add test expectations to each task."
+
+**File specificity.** Tasks should name the exact files to create or modify. "Update the payments module" is vague. "Create `src/payments/webhooks/stripeWebhookHandler.ts` and add the route to `src/payments/routes.ts`" is actionable.
+
+### How to intervene
+
+You can edit the plan before execution starts:
+
+> "Split task 3 into two — one for the subscription.created handler and one for updated+deleted. Task 3 is too big for a single subagent to handle cleanly."
+
+> "Add a task 0 at the beginning: verify the existing test suite passes before we start making changes."
+
+> "Task 5 depends on the API server being running for schema regeneration. Add a note about that."
+
+## Phase 4: Execution
+
+Claude will offer a choice between `executing-plans` (batch with human checkpoints) and `subagent-driven-development` (automated with two-stage review). Here's how to pick.
+
+### When to use subagent-driven development
+
+- The plan has 3+ tasks
+- Tasks are well-specified (you invested in the planning phase)
+- You want to step away and let Claude work
+- Test coverage matters (the two-stage review catches missing tests)
+
+### When to use executing-plans
+
+- The plan has 1-2 tasks
+- You want to review each step before the next one starts
+- The tasks involve tricky integration points where you expect subagents to need guidance
+- You're prototyping and want tight feedback loops
+
+### What happens during subagent-driven development
+
+For each task, Claude:
+
+1. Dispatches a fresh subagent with the task spec and relevant context
+2. The subagent writes a failing test (TDD is enforced)
+3. The subagent implements just enough to pass the test
+4. The subagent commits
+5. A spec compliance reviewer reads the actual code and verifies requirements
+6. A code quality reviewer checks for clean code and test coverage
+7. If either reviewer flags issues, a fix subagent is dispatched
+
+You can monitor this or walk away. The two-stage review catches most issues without your involvement.
+
+### When to intervene during execution
+
+**A subagent is stuck on a test.** If a task fails multiple times, Claude will sometimes loop. Interrupt with context: "The test is failing because the database seed doesn't include that fixture. Add it to the test setup."
+
+**A reviewer flags something you disagree with.** "The reviewer's concern about error handling is valid, but the approach it suggests is over-engineered for our needs. Keep the simple try/catch — we'll add more sophisticated handling if we need it."
+
+**A task reveals a plan flaw.** "Task 3 assumed the subscription model already exists, but task 2 hasn't created it yet. Reorder: run the migration task before the handler task."
+
+**The scope is drifting.** "The subagent added a caching layer that wasn't in the plan. Remove it — we don't need caching for this feature."
+
+### What your hooks are doing during execution
+
+While subagents work, your PostToolUse hooks fire on every file edit:
+
+- **Prettier** formats the code immediately — no style issues accumulate
+- **ESLint** catches errors per-file — the subagent sees the lint output and fixes before moving on
+- **Schema nudge** reminds about regeneration when GraphQL files change
+- **Package impact** warns when shared packages are edited, with the exact downstream check command
+
+And the PreToolUse hook:
+
+- **Block generated files** prevents subagents from editing `sdk.ts`, `schema.graphql`, or `dist/` — they get an error with the correct regeneration command instead
+
+These hooks work without any intervention from you. They're the operational layer that catches what process discipline alone can't.
+
+## Phase 5: Verification and Finishing
+
+When all tasks are complete, Claude runs the full verification before claiming success.
+
+### What verification looks like
+
+If your setup includes a verification matrix (and it should), Claude looks up what it touched and runs the corresponding commands:
+
+- Edited API mutations? → `turbo run lint:ci ts test:once --filter=api`
+- Edited GraphQL schema? → Full schema chain + API tests
+- Edited a shared package? → `turbo run lint:ci ts --filter=@myorg/<pkg>...` (the `...` includes downstream dependents)
+
+If you have the package-impact hook, Claude was reminded of the right command throughout the session. Verification is confirming what the hooks already suggested.
+
+### Finishing the branch
+
+The `finishing-a-development-branch` skill activates and presents options:
+
+1. **Merge to source branch** — for small features where you've reviewed as you went
+2. **Create a PR** — for features that need team review
+3. **Keep the worktree** — for features you want to manually test before deciding
+4. **Discard** — for spikes or explorations that didn't pan out
+
+For most PRD-driven features, option 2 is the right choice. Claude will create the PR with a summary derived from the design document and the commit history.
+
+## The Full Workflow at a Glance
+
+```
+┌─────────────────────────────────────────────────┐
+│  YOU: Write opening prompt (PRD + context +     │
+│       constraints + open questions)              │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│  BRAINSTORMING: Claude asks questions,           │
+│  proposes approaches, presents design            │
+│  YOU: Answer, push back, approve sections        │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│  PLANNING: Claude breaks design into tasks       │
+│  YOU: Review task size, ordering, test coverage  │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│  EXECUTION: Subagents implement task by task     │
+│  HOOKS: Format, lint, nudge, block in real time  │
+│  REVIEWERS: Spec compliance + code quality       │
+│  YOU: Monitor or walk away                       │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│  VERIFICATION: Run scoped checks from matrix     │
+│  FINISHING: Merge, PR, keep, or discard          │
+└─────────────────────────────────────────────────┘
+```
+
+## Prompt Templates
+
+### For a well-defined PRD
+
+```
+I need to implement [feature name] as described in [ticket/doc reference].
+
+Here's my understanding:
+- [Core requirement 1]
+- [Core requirement 2]
+- [Core requirement 3]
+
+Existing code context:
+- [Relevant module] lives at [path]
+- [Related feature] already handles [similar thing]
+- We use [pattern/library] for [relevant concern]
+
+Constraints:
+- [Technical constraint from PRD or your knowledge]
+- [Performance/security/compatibility requirement]
+
+Open questions:
+- [Ambiguity 1 from the PRD]
+- [Ambiguity 2]
+
+Please brainstorm the design before writing any code.
+```
+
+### For a vague PRD
+
+```
+The PRD for [feature] is thin on details. Here's what it says:
+[paste the PRD text]
+
+What I think this means in practice:
+- [Your interpretation 1]
+- [Your interpretation 2]
+
+What's missing from the PRD:
+- [Gap 1 — does it mean X or Y?]
+- [Gap 2 — no mention of error handling for Z]
+- [Gap 3 — unclear if this is user-facing or admin-only]
+
+Let's brainstorm and nail down the requirements before planning.
+I'd rather spend time on design than discover gaps during implementation.
+```
+
+### For a bug fix with a ticket
+
+```
+Bug report: [ticket reference]
+
+Reproduction: [steps or description]
+Expected: [what should happen]
+Actual: [what happens instead]
+
+My initial read: this might be related to [module/component] because [reasoning].
+But I haven't verified — please investigate systematically before proposing a fix.
+```
+
+The "investigate systematically" phrasing triggers the systematic debugging skill, which enforces evidence gathering before hypothesis formation.
+
+### For a feature that touches multiple domains
+
+```
+This feature spans [domain A] and [domain B]:
+- [Domain A change]: [description]
+- [Domain B change]: [description]
+- They connect via [shared interface/API/database]
+
+Existing code:
+- Domain A: [path and key files]
+- Domain B: [path and key files]
+- Shared: [path to shared types/interfaces]
+
+I want to design the shared interface first, then plan the domain-specific work.
+If the tasks are independent enough, we can use parallel agents for the two domains.
+```
+
+This last line signals that you're aware of the `dispatching-parallel-agents` skill and opens the door for Claude to suggest it if appropriate.
+
+## Common Mistakes
+
+### Mistake 1: Skipping your own reading of the PRD
+
+If you haven't read the PRD, you can't evaluate whether Claude's brainstorming questions are on-target or missing the point. You'll approve a design that seems reasonable but misses a key requirement, and you'll discover it during implementation when it's expensive to fix.
+
+**Fix:** Spend a few minutes reading the PRD. Write down your interpretation and open questions. Feed both to Claude.
+
+### Mistake 2: Rushing through brainstorming
+
+"Looks good, proceed" on every brainstorming section saves time now and costs significantly more during implementation. The brainstorming phase is your highest-leverage intervention point — a correction here costs nothing, a correction during execution means rework and context pollution.
+
+**Fix:** Actually read each section. Ask yourself: "If a junior dev implemented exactly this, would the result be what I want?" If not, push back now.
+
+### Mistake 3: Not adding constraints to your prompt
+
+Claude doesn't know your deployment environment, your performance requirements, your team's conventions, or your tech debt. The PRD probably doesn't mention them either. If you don't add constraints, Claude will make reasonable-but-wrong assumptions.
+
+**Fix:** Always include a "Constraints" section in your opening prompt. Even obvious things like "we're on PostgreSQL, not MySQL" prevent wrong turns.
+
+### Mistake 4: Letting scope creep through
+
+Claude is helpful by nature. During brainstorming, it will suggest enhancements that aren't in the PRD. During implementation, subagents will add "nice to have" features. This is the over-building failure mode.
+
+**Fix:** Compare every design decision and implementation choice against the PRD. If it's not in the PRD, it needs explicit justification. "That's out of scope for this ticket" is always a valid response.
+
+### Mistake 5: Not intervening when execution goes wrong
+
+Subagent-driven development is automated but not infallible. If a task fails twice and Claude dispatches a third attempt, the odds of the third attempt succeeding with the same approach are low. This is where the systematic debugging skill should activate, but sometimes it doesn't.
+
+**Fix:** If you see a task loop, intervene with context. "The test is failing because \[specific reason\]. Try \[specific approach\]." Or: "This task's approach isn't working. Let's revise the plan — split it into smaller steps."
+
+### Mistake 6: Ignoring hook output
+
+Your hooks are printing warnings and fixing formatting in real time. If the schema-nudge hook has fired three times and you haven't regenerated the schema, you're accumulating tech debt that will bite during verification.
+
+**Fix:** Treat hook output like compiler warnings. Address them when they appear, not at the end.
+
+## What This Workflow Gives You
+
+When it works well — good opening prompt, engaged brainstorming, well-scoped plan, clean execution — you get:
+
+- A feature branch with atomic commits, one per task
+- Tests written before implementation (TDD enforced by the skill)
+- A design document committed to the repo explaining the architectural decisions
+- Code that follows your project's conventions (enforced by hooks and CLAUDE.md)
+- A clean PR ready for team review
+
+The key insight: your time investment is front-loaded in the phases where it has the most leverage (prompt, brainstorming, planning) and minimal in the phase where it has the least (implementation). That's the inversion that makes this workflow work — you spend your time on design decisions, not code production.
