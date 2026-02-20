@@ -1,0 +1,299 @@
+---
+title: "Autonomous Doesn't Mean Unsupervised: Building the Safety Net That Lets Claude Code Alone"
+date: '2026-02-20'
+tags: ['claude', 'developer-tools', 'automation', 'dx', 'ai']
+draft: false
+summary: "There are two wrong ways to run Claude Code: approve every action manually or skip permissions entirely. The right way is to build a layered safety net — scoped permissions, hooks, skills, and memory — that does the supervising for you. Here's the six-layer system I use on a production monorepo."
+---
+
+There are two ways people run Claude Code.
+
+The first way: approve every action manually. Claude wants to edit a file — you click approve. Claude wants to run a test — you click approve. Claude wants to commit — you click approve. You're a human CI pipeline, rubber-stamping operations that are obviously fine while staying alert for the one that isn't. After thirty minutes of this you're either bored or fatigued, and either way you're not catching the thing the approval system was supposed to catch.
+
+The second way: `--dangerously-skip-permissions`. Let Claude do whatever it wants. No approvals, no gates, no oversight. Claude edits files, runs commands, installs packages, modifies your database — all without asking. This works great until it deletes something it shouldn't, edits a generated file that gets overwritten on the next build, or force-pushes to main.
+
+Both of these are wrong, and the reason they're wrong is the same: they put oversight in the wrong place.
+
+Manual approval puts oversight on every operation regardless of risk. You're spending attention on `git status` (always safe) with the same approval flow as `git push --force` (never safe without review). The signal-to-noise ratio is terrible, so you stop paying attention, which defeats the purpose.
+
+Skip-permissions puts oversight nowhere. You're trusting that Claude will never make a mistake that your project can't recover from. On a toy project, that's fine. On a production monorepo with migrations, shared packages, and a deployment pipeline, it's a matter of time.
+
+The third way — the one that actually works — is to **build a safety net that does the supervising for you.** Auto-approve the operations that are always safe. Auto-block the operations that are never safe. Auto-catch the mistakes that happen in the middle. Then Claude runs autonomously and you don't click approve, not because you removed the oversight, but because you moved it into configuration that doesn't get fatigued.
+
+This is how I run Claude Code on a production TypeScript monorepo — GraphQL API, Next.js frontend, ~20 shared packages, PostgreSQL. Claude works autonomously for an hour at a time. I don't click approve. I also don't skip permissions. Here's how.
+
+## Layer 1: Scoped Permissions
+
+Claude Code's permission system is the foundation. Instead of "approve everything" or "approve nothing," you define exactly what's auto-approved and what's blocked.
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git checkout*)",
+      "Bash(git branch*)",
+      "Bash(git push *)",
+      "Bash(yarn *)",
+      "Bash(npm *)",
+      "Bash(docker *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push * --force*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)"
+    ]
+  }
+}
+```
+
+This is a whitelist, not a blacklist. Claude can run git operations, package managers, and docker commands without asking. But force push, hard reset, and clean are blocked — these are the destructive operations that can't be undone, and they require me to explicitly confirm.
+
+The key insight: **the allow list is long because the deny list is specific.** Most git and yarn commands are safe. The dangerous ones are a small, well-known set. By denying those explicitly and allowing the rest, Claude can work fluidly through routine operations while the actually dangerous stuff still requires human confirmation.
+
+This also works for MCP tools. If you use database tools, GitHub tools, or project management integrations, you can auto-approve reads and require approval for writes:
+
+```json
+"allow": [
+  "mcp__postgres__query",
+  "mcp__github__pull_request_read",
+  "mcp__github__list_pull_requests",
+  "mcp__linear__get_issue",
+  "mcp__linear__list_issues"
+]
+```
+
+Claude can read issues, read PRs, and query the database without asking. Creating issues, commenting on PRs, or modifying data would still prompt for approval.
+
+## Layer 2: PreToolUse Hooks (Prevent Mistakes Before They Happen)
+
+Permissions handle what commands Claude can run. Hooks handle what files Claude can touch.
+
+A PreToolUse hook runs before an Edit or Write operation. If it exits with a non-zero code, the operation is blocked. This is your first line of defense against a class of mistakes that no amount of process discipline prevents: editing generated files.
+
+Every project with a code generation pipeline has files that should never be edited by hand. In my project, that's the generated GraphQL SDK, the derived schema file, and anything in `dist/`. Claude doesn't always know these are generated — especially subagents working with limited context.
+
+```bash
+#!/bin/bash
+# block-generated-files.sh — PreToolUse hook
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+[ -z "$FILE_PATH" ] && exit 0
+
+case "$FILE_PATH" in
+  */generated/*)
+    echo "BLOCKED: This is a generated file. Do not edit directly."
+    echo "  Regenerate with: yarn workspace @myorg/client-sdk bootstrap"
+    exit 1
+    ;;
+  */schema.graphql)
+    echo "BLOCKED: schema.graphql is derived from the running API."
+    echo "  Regenerate with: npm run schema"
+    exit 1
+    ;;
+  */dist/*)
+    echo "BLOCKED: dist/ contains compiled output. Edit the source file instead."
+    exit 1
+    ;;
+esac
+exit 0
+```
+
+Register it in your settings:
+
+```json
+"hooks": {
+  "PreToolUse": [
+    {
+      "matcher": "Write|Edit",
+      "hooks": [
+        {
+          "type": "command",
+          "command": ".claude/hooks/block-generated-files.sh",
+          "timeout": 5
+        }
+      ]
+    }
+  ]
+}
+```
+
+Now Claude can edit any source file autonomously, but if it tries to edit a generated file — even accidentally, even in a subagent with limited context — the hook blocks it and tells it what to do instead. The mistake is impossible, not just unlikely.
+
+This is the difference between guardrails and discipline. Discipline says "don't edit generated files." Guardrails make it so you can't.
+
+## Layer 3: PostToolUse Hooks (Catch and Fix in Real Time)
+
+PreToolUse prevents mistakes. PostToolUse catches and corrects them after they happen. These hooks fire after every Edit or Write operation and fall into two patterns.
+
+### Pattern 1: Fix it now
+
+Auto-formatting and linting run after every file edit. Claude sees the result immediately and incorporates it into its next action.
+
+**Prettier** — formats the file on save. Claude never accumulates style debt, and you never waste a code review cycle on formatting.
+
+**ESLint** — runs on the changed file and reports errors. If the hook finds a problem, Claude sees it in the tool output and fixes it before writing more code on top of a broken foundation.
+
+```json
+{
+  "matcher": "Write|Edit",
+  "hooks": [
+    {
+      "type": "command",
+      "command": ".claude/hooks/prettier-format.sh",
+      "timeout": 30
+    },
+    {
+      "type": "command",
+      "command": ".claude/hooks/eslint-check.sh",
+      "timeout": 30
+    }
+  ]
+}
+```
+
+These hooks are the equivalent of a colleague looking over Claude's shoulder and saying "you missed a semicolon" before Claude moves on. Without them, formatting and lint errors accumulate silently until you run a full check at the end — by which point there might be dozens of issues that are tedious to untangle.
+
+### Pattern 2: Just remind
+
+Not every hook needs to fix something. Some just provide information that Claude needs to make good decisions.
+
+**Schema nudge** — when Claude edits a GraphQL schema file, a lightweight hook prints a reminder:
+
+```
+SCHEMA REMINDER: You edited a Pothos schema file. When done, run:
+  npm run schema && yarn workspace @myorg/client-sdk bootstrap
+```
+
+It doesn't block. It doesn't run the command. It just ensures Claude knows the regeneration step exists, even if the subagent working on the file doesn't have that context.
+
+**Package impact** — when Claude edits a file in a shared package, a hook prints which apps consume that package and the command to check downstream:
+
+```
+PACKAGE IMPACT: @myorg/utils is consumed by: api, web
+  Check downstream: turbo run lint:ci ts --filter=@myorg/utils...
+```
+
+This solves one of the most common Claude Code mistakes in monorepos: editing a shared utility and not checking whether the change breaks consumers. The hook doesn't block the edit — the edit might be perfectly fine — but it ensures Claude knows about the downstream impact.
+
+Both reminder hooks run in 5 seconds or less. They add almost no latency to the workflow and prevent minutes of debugging.
+
+## Layer 4: Skills (Process Discipline)
+
+Hooks handle the mechanical layer — formatting, linting, blocking, reminding. Skills handle the process layer — making sure Claude follows an engineering workflow rather than just generating code.
+
+This is where the [Superpowers plugin](https://github.com/obra/superpowers) comes in. It adds skills that enforce:
+
+- **Brainstorming before building** — Claude asks clarifying questions and presents a design for approval before writing any code
+- **TDD** — write a failing test, watch it fail, implement, watch it pass, then refactor. If Claude writes code before the test, the skill tells it to delete the code and start over.
+- **Subagent-driven development** — each implementation task gets a fresh subagent with clean context, followed by a spec compliance review and a code quality review
+- **Systematic debugging** — evidence gathering before hypothesis formation, not guess-and-check
+- **Verification before completion** — Claude must run verification commands before claiming work is done
+
+These skills are enforced, not suggested. The TDD skill anticipates Claude's rationalizations for skipping tests and explicitly blocks them. The brainstorming skill requires design approval before any implementation skill can activate.
+
+**Why skills matter for autonomous operation:** without skills, an autonomous Claude will generate code fast and skip everything else. You'll get an implementation with no tests, no design document, and no verification. With skills, autonomous Claude follows the same process a disciplined engineer would — it just doesn't need you to enforce it.
+
+## Layer 5: Memory (Cross-Session Knowledge)
+
+The previous layers handle a single session. Memory handles knowledge that persists across sessions.
+
+Claude Code's auto-memory (`~/.claude/projects/<project>/memory/`) stores files that load into every new session. This is where you capture the mistakes that burned time so they don't happen again.
+
+Real examples from my project:
+
+- **Stale compiled migrations** — if tests fail with migration corruption, check `dist/db/migrations/` for stale `.js` files that don't have corresponding `.ts` sources. This burned two hours the first time. Never again.
+- **Timezone in date comparisons** — DATE columns in PostgreSQL require timezone-aware conversion when comparing "earned today." Tests that insert DATE values must use a specific helper function or comparisons silently mismatch.
+- **Third-party SDK startup crash** — a specific SDK crashes if an environment variable doesn't start with a specific prefix. It's an env config issue, not a code bug.
+
+None of these are things you'd put in `CLAUDE.md` (they're too specific and too personal). But they're exactly the things that make an autonomous Claude session go smoothly vs. spending 30 minutes debugging a problem it already solved last week.
+
+## Layer 6: Verification Matrix
+
+The final layer ties everything together. A verification matrix maps "what you touched" to "what commands to run":
+
+| What you touched         | Verification command                            |
+| ------------------------ | ----------------------------------------------- |
+| API mutation/query logic | `turbo run lint:ci ts test:once --filter=api`   |
+| GraphQL schema           | `npm run schema` + SDK rebuild + API tests      |
+| Database migration       | `yarn workspace api migrate` + API tests        |
+| Shared package           | `turbo run lint:ci ts --filter=@myorg/<pkg>...` |
+| Web components           | `turbo run lint:ci ts --filter=@myorg/web`      |
+| Test files only          | `yarn workspace api vitest <file>`              |
+
+This lives in your `.claude.local.md` (personal instructions, gitignored). When Claude finishes a task and the Superpowers verification skill asks "did you verify?", Claude looks up what it touched in this matrix and runs the exact right command. Not the entire test suite. Not a guess. The scoped command for what actually changed.
+
+The package-impact hook reinforces this — it's been printing the turbo command with the `...` suffix throughout the session. By the time verification runs, Claude has already been told what to check.
+
+## How It All Connects
+
+Here's a real workflow with all six layers active. Claude is adding a new API mutation to a contest module:
+
+1. **Skills**: Brainstorming activates. Claude asks design questions, presents an approach, gets approval. A domain-specific mutation skill auto-loads based on the file pattern being edited.
+
+2. **Skills**: A plan is created with 5 implementation tasks. Subagent-driven development begins.
+
+3. **Permissions**: Each subagent runs `git add`, `git commit`, `yarn workspace api vitest` — all auto-approved. No human clicks needed.
+
+4. **PreToolUse hook**: A subagent tries to edit `schema.graphql` directly. The hook blocks it: "This is a derived artifact. Regenerate with `npm run schema`." The subagent runs the command instead.
+
+5. **PostToolUse hooks**: After each file edit, Prettier formats the code and ESLint checks for errors. The subagent sees a Shield rule violation (using `allow` instead of `isVoter` on a mutation field) and fixes it immediately.
+
+6. **PostToolUse hooks**: After editing a file in `packages/utils/`, the package-impact hook fires: "consumed by api and web. Check downstream with `turbo run lint:ci ts --filter=@myorg/utils...`"
+
+7. **Skills**: Two-stage review runs after each task. Spec compliance reviewer checks requirements. Code quality reviewer checks tests and maintainability.
+
+8. **Memory**: Claude checks for known gotchas in this module. Memory says DATE comparisons need timezone-aware conversion. The implementation uses the correct helper.
+
+9. **Verification matrix**: All tasks complete. Claude looks up "API mutation/query logic" → runs `turbo run lint:ci ts test:once --filter=api`. Tests pass.
+
+10. **Permissions**: Claude runs `git push` — auto-approved. Creates a PR via `gh pr create` — auto-approved. Done.
+
+I didn't click approve once. I wasn't even at my desk for most of it. But the guardrails caught a generated file edit, a security rule violation, a potential downstream break, and a timezone gotcha — all automatically.
+
+## The Permission Expansion Principle
+
+Here's the mental model that makes this work: **start restrictive, expand as you add guardrails.**
+
+When you first install Claude Code, approve everything manually. Notice what you approve without thinking — that's your allow list. Notice what makes you pause — that's where you need a hook or a deny rule before you auto-approve it.
+
+When you add a Prettier hook, you can stop worrying about formatting in your approvals. When you add an ESLint hook, you can stop worrying about lint errors. When you add a PreToolUse hook for generated files, you can stop worrying about accidental edits to derived artifacts.
+
+Each guardrail you add earns you a permission expansion. The hooks do the checking you used to do manually. Your approval clicks decrease not because you removed oversight but because you automated it.
+
+This is the opposite of `--dangerously-skip-permissions`, which removes all oversight at once and hopes nothing goes wrong. The layered approach removes oversight incrementally, one category at a time, and only after you've verified the guardrail catches what your manual review was catching.
+
+## The Honest Limits
+
+This system isn't perfect. Here's where it doesn't help:
+
+**Novel architectural decisions.** Hooks catch mechanical mistakes. Skills enforce process. Neither can evaluate whether a design decision is right for your project. That's what the brainstorming phase is for — you need to be present and engaged during design, even if you walk away during implementation.
+
+**Requirements ambiguity.** If the PRD is vague, Claude will fill in the gaps with reasonable-but-wrong assumptions. No guardrail catches "implemented correctly but implemented the wrong thing." Read the PRD. Be specific in your prompt.
+
+**Third-party API changes.** If a library's API changed since Claude's training data, hooks won't catch the mistake. The test suite might, but only if you have good integration tests.
+
+**The first time.** Every guardrail in this article exists because something went wrong without it. The stale migration memory entry exists because I spent two hours debugging it. The generated-file hook exists because a subagent edited `sdk.ts` and I wasted a session figuring out why the changes disappeared on rebuild. You'll hit your own failure modes. When you do, add a guardrail and move on.
+
+## Getting Started
+
+You don't need all six layers on day one. Build them incrementally:
+
+**Week 1: Permissions.** Look at what you approve without thinking. Add those to the allow list. Add destructive operations to the deny list.
+
+**Week 2: PostToolUse hooks.** Add Prettier and ESLint. These two hooks alone eliminate the largest category of manual oversight (code quality checks).
+
+**Week 3: PreToolUse hook.** Identify your generated files and block them. This eliminates the most frustrating category of mistakes (edits that silently get overwritten).
+
+**Week 4: Skills.** Install Superpowers. Let it enforce brainstorming and TDD. This eliminates the most expensive category of mistakes (building the wrong thing, or building the right thing without tests).
+
+**Ongoing: Memory and verification.** When something burns time, write it down. When you find yourself running the wrong verification command, add it to the matrix. These layers accumulate naturally and get more valuable over time.
+
+Within a month you'll have a setup where Claude works autonomously on feature branches while hooks catch mechanical mistakes, skills enforce process discipline, and permissions block the operations that can't be undone. You'll go from clicking approve fifty times per session to clicking it two or three times — and those two or three times will be for operations that genuinely deserve your attention.
+
+That's what autonomous with guardrails looks like. Not unsupervised. Not permission-less. Just supervised by configuration instead of supervised by you.
