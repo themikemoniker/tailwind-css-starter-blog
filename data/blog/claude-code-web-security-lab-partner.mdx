@@ -1,0 +1,331 @@
+---
+title: Using Claude Code as Your Web Security Lab Partner
+date: '2026-03-19'
+tags: ['claude-code', 'web-security', 'penetration-testing', 'portswigger', 'security']
+draft: false
+summary: A practical guide to running AI-assisted penetration testing against PortSwigger Web Security Academy labs using Claude Code and the communitytools repo.
+---
+
+A practical guide to running AI-assisted penetration testing against PortSwigger Web Security Academy labs
+
+Web security is one of those fields where reading about vulnerabilities and actually exploiting them are two completely different experiences. PortSwigger's Web Security Academy is the gold standard for hands-on learning — but working through 200+ labs solo can be slow going. This guide shows you how to use Claude Code with the communitytools repo to turn those labs into an interactive back-and-forth with an AI that already knows the curriculum cold.
+
+The short version: you point Claude Code at a live PortSwigger lab, it runs real attacks, you watch what it does, and you learn why it works (or why it doesn't).
+
+## What You're Building
+
+The setup has three layers:
+
+- **PortSwigger Web Security Academy** — free, isolated lab environments at [portswigger.net/web-security](https://portswigger.net/web-security). Each lab gives you a temporary URL to attack. No ToS issues, no collateral damage risk. This is the only safe and appropriate target for automated scanning with this toolchain.
+- **Claude Code** — Anthropic's CLI coding agent. This is what does the actual work.
+- **transilienceai/communitytools** — an open-source Claude Code skill repo that encodes the entire PortSwigger curriculum into Claude's context, plus orchestrates 30+ parallel vulnerability testing agents.
+
+## Prerequisites
+
+- A Claude Max subscription (or API access with sufficient credits — the parallel agents burn through tokens)
+- Node.js 18+
+- Python 3.10+
+- Git
+- A PortSwigger account (free at [portswigger.net](https://portswigger.net))
+
+## Step 1: Install Claude Code
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude login
+```
+
+Verify it works:
+
+```bash
+claude --version
+```
+
+## Step 2: Install Playwright MCP
+
+The executor agents use Playwright to drive a real browser — this is how they test client-side vulnerabilities like XSS, CSRF, and clickjacking.
+
+```bash
+claude mcp add playwright npx @playwright/mcp@latest
+```
+
+Install the browser binaries:
+
+```bash
+npx playwright install chromium
+```
+
+Verify it's registered:
+
+```bash
+claude mcp list
+```
+
+You should see `playwright` in the list.
+
+## Step 3: Clone and Audit the communitytools Repo
+
+Clone to a dedicated directory — keep it separate from any real projects:
+
+```bash
+git clone https://github.com/transilienceai/communitytools ~/pentest-tools
+cd ~/pentest-tools
+```
+
+Pin to the current known-good commit before using it:
+
+```bash
+git checkout 30e3e93
+```
+
+A note on trust: this repo is open source and auditable. The `.claude/` directory contains only markdown skill files and a few Python utilities (a credential manager, CSV parser, and findings tracker). There are no network calls, no exfiltration hooks, no malicious instructions. That said, always pin to a specific commit rather than tracking main — supply chains change.
+
+## Step 4: Install the Pentest Tools
+
+The executor agents use standard security tools. Install them:
+
+**macOS:**
+
+```bash
+brew install nmap sqlmap nikto gobuster ffuf
+```
+
+**Linux (Debian/Ubuntu):**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nmap sqlmap nikto gobuster ffuf
+```
+
+Or use the included installer script:
+
+```bash
+cd ~/pentest-tools/tools
+./kali/install.sh
+```
+
+## Step 5: Start a PortSwigger Lab
+
+Go to [portswigger.net/web-security](https://portswigger.net/web-security) and pick a lab. Each lab gives you a button to "Access the lab" — this spins up a temporary isolated environment and gives you a URL like:
+
+```
+https://0a1b2c3d4e5f.web-security-academy.net
+```
+
+That URL is yours to attack. It expires after a few hours. Copy it.
+
+## Step 6: Run Claude Code Against the Lab
+
+Navigate to the pentest project directory and launch Claude Code:
+
+```bash
+cd ~/pentest-tools/projects/pentest
+claude
+```
+
+Then give it the lab URL and what you want to test. Example prompt:
+
+```
+I have a PortSwigger lab running at https://0a1b2c3d4e5f.web-security-academy.net
+The lab is about SQL injection. My credentials are wiener:peter.
+Run the pentest skill against this target. Scope is limited to this single domain only.
+```
+
+Claude will:
+
+1. Run reconnaissance to map the application
+2. Build a test plan and ask for your approval before starting
+3. Deploy executor agents in parallel across vulnerability categories
+4. Write findings, PoC scripts, and evidence to `outputs/`
+5. Generate a final report
+
+Review the test plan when it appears. For a focused learning session, tell it to skip IP infrastructure testing (nmap against a web app URL is mostly noise) and focus on the vulnerability class the lab is teaching.
+
+## Step 7: Read the Activity Logs
+
+This is the actual learning part. While Claude works, watch the logs:
+
+```bash
+tail -f outputs/*/activity/pentester-orchestrator.log
+```
+
+And after it finishes:
+
+```bash
+cat outputs/*/pentest-report.json | python -m json.tool
+ls outputs/*/findings/
+```
+
+Each finding directory contains:
+
+- **description.md** — what the vulnerability is and why it matters
+- **poc.py** — a runnable exploit script
+- **poc_output.txt** — proof it worked
+- **workflow.md** — manual steps to reproduce
+- **evidence/** — screenshots and HTTP request/response logs
+
+Compare Claude's approach against PortSwigger's official solution. Where they diverge is where the interesting learning happens.
+
+## Which Labs to Run This Against
+
+Not all labs are equally well-suited for automated testing. Here's a practical ordering based on how much signal you'll get from the tool vs. how much you need to engage manually.
+
+### Start Here: High Signal, Fully Automated
+
+These labs have clear injection points and straightforward exploitation chains. Claude will usually solve them without help and produce good explanations.
+
+**SQL Injection**
+
+- SQL injection vulnerability in WHERE clause allowing retrieval of hidden data
+- SQL injection vulnerability allowing login bypass
+- SQL injection UNION attack, determining the number of columns returned by the query
+- SQL injection UNION attack, finding a column containing text
+- SQL injection UNION attack, retrieving data from other tables
+- SQL injection with filter bypass via XML encoding
+
+**XSS (Reflected)**
+
+- Reflected XSS into HTML context with nothing encoded
+- Reflected XSS into attribute with angle brackets HTML-encoded
+- Reflected XSS into a JavaScript string with angle brackets HTML encoded
+- Stored XSS into HTML context with nothing encoded
+
+**Path Traversal**
+
+- File path traversal, simple case
+- File path traversal, traversal sequences blocked with absolute path bypass
+- File path traversal, traversal sequences stripped non-recursively
+
+**Access Control / IDOR**
+
+- Unprotected admin functionality
+- Unprotected admin functionality with unpredictable URL
+- User role controlled by request parameter
+- Insecure direct object references
+
+### Next: Good Signal, Worth Watching Closely
+
+These require a bit more context or multi-step reasoning. Claude will often get partway and stall — which is where you step in and learn the most.
+
+**Authentication**
+
+- Username enumeration via different responses
+- Username enumeration via subtly different responses
+- Username enumeration via response timing
+- Broken brute-force protection, IP block
+- 2FA simple bypass
+- Password reset broken logic
+
+**SSRF**
+
+- Basic SSRF against the local server
+- Basic SSRF against another back-end system
+- SSRF with blacklist-based input filter
+
+**XXE**
+
+- Exploiting XXE using external entities to retrieve files
+- Exploiting XXE to perform SSRF attacks
+- Exploiting XInclude to retrieve files
+
+**CSRF**
+
+- CSRF vulnerability with no defenses
+- CSRF where token validation depends on request method
+- CSRF where token is duplicated in cookie
+
+### Manual-First, Use Claude to Check Your Work
+
+These labs require Burp Collaborator for out-of-band testing, or involve timing attacks that are hard for an agent to coordinate reliably. Work through them yourself, then use Claude Code to review your PoC and help you write it up properly.
+
+**Blind SQL Injection**
+
+- Blind SQL injection with conditional responses
+- Blind SQL injection with conditional errors
+- Blind SQL injection with time delays and information retrieval
+
+**Blind SSRF / XXE**
+
+- Blind SSRF with out-of-band detection (requires Collaborator)
+- Exploiting blind XXE to exfiltrate data (requires Collaborator)
+
+**Race Conditions**
+
+- Limit overrun race conditions
+- Multi-endpoint race conditions
+- Single-endpoint race conditions
+- Bypassing rate limits via race conditions
+
+**HTTP Request Smuggling** — All of these are better approached manually first — the timing sensitivity and proxy-level behavior is hard for agents to get right without Burp Suite's specialized tooling.
+
+### Advanced: Use Claude Code as a Study Partner
+
+For the Practitioner and Expert level labs in JWT attacks, OAuth, prototype pollution, and web cache poisoning, the best approach is:
+
+1. Read the lab description and try it yourself first
+2. Get stuck
+3. Open Claude Code without the pentest skill and just ask: "explain what's happening in this JWT alg:none attack and help me write the exploit"
+4. Use it as a tutor, not an autopilot
+
+This is where the knowledge base really shines — the `jwt_attack_techniques.md`, `oauth-portswigger-labs-complete.md` etc. files contain deep explanations, not just payload lists.
+
+## Tips for Getting the Most Out of This
+
+**Give Claude context about the lab type.** The orchestrator deploys all executors by default, which wastes time. Tell it upfront: "This is an XSS lab, focus on client-side testing." This lets it skip the SQL injection, SSRF, and network recon executors.
+
+**Read the PoC scripts.** The `poc.py` files Claude generates are often the best part — they're clean, commented Python that shows exactly how the exploit works. Even if Claude solves a lab you could have solved yourself, the PoC is worth reading.
+
+**When Claude fails, that's the lesson.** If an executor tries a payload and the WAF blocks it (some PortSwigger labs have WAF bypass components), ask Claude Code to explain what happened and how you'd approach bypassing it manually. The failure path teaches more than the happy path.
+
+**Don't run this against anything except PortSwigger labs.** The tool is designed for isolated, authorized targets. Appwrite Cloud, your employer's staging environment, someone else's API — all off limits, regardless of whether you have an account. PortSwigger labs are purpose-built for this.
+
+## Recommended Learning Path
+
+If you're starting from scratch with web security:
+
+1. **Week 1-2:** SQL injection labs (all Apprentice, then Practitioner UNION attacks). Use Claude to automate, read every PoC.
+2. **Week 3:** XSS — reflected first, then stored, then DOM-based. The DOM-based labs are worth doing manually.
+3. **Week 4:** Authentication and access control. IDOR is underrated — spend time here.
+4. **Week 5:** SSRF and XXE. These are the ones that appear in real bug bounty reports constantly.
+5. **Week 6+:** JWT attacks, OAuth, business logic, race conditions. Slower pace, more manual work.
+
+The PortSwigger learning paths at [portswigger.net/web-security/learning-paths](https://portswigger.net/web-security/learning-paths) give you a curated ordering if you want more structure.
+
+## Troubleshooting
+
+### Claude Code can't find the MCP server
+
+```bash
+claude mcp list  # verify playwright shows up
+claude mcp remove playwright
+claude mcp add playwright npx @playwright/mcp@latest
+```
+
+### The lab URL expired
+
+PortSwigger labs time out after a few hours. Just start a new instance and use the new URL. Your `outputs/` directory will still have the previous run's findings.
+
+### Claude asks for tool approval constantly
+
+This is expected behavior — Claude Code asks before running bash commands. You can run with `--dangerously-skip-permissions` for fully automated runs against labs, but only do this in the `projects/pentest` directory against PortSwigger targets.
+
+```bash
+cd ~/pentest-tools/projects/pentest
+claude --dangerously-skip-permissions
+```
+
+### sqlmap gets blocked immediately
+
+Some PortSwigger labs have rate limiting. Pass this context to the orchestrator and it will fall back to manual payload testing via curl.
+
+## What This Setup Can't Do
+
+- **Burp Collaborator replacement** — blind out-of-band testing (blind SSRF, blind XXE, blind command injection) requires an external server that receives callbacks. The tool doesn't have this. You need Burp Suite Professional for those labs.
+- **Active scanner replacement** — this is a directed agent, not a comprehensive scanner like Burp's active scanner. It won't catch everything.
+- **Real-world targets** — the tool is calibrated for PortSwigger's lab structure. Real applications have different authentication flows, rate limiting, and defensive measures that will require significant manual adaptation.
+
+---
+
+The goal isn't to skip the learning — it's to accelerate it. Running an automated agent against a lab and then carefully reading the activity logs, PoC scripts, and failure cases will teach you more per hour than manually clicking through every step yourself. Use the automation to cover ground faster, and use the output as material to study.
+
+Good luck.
