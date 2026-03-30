@@ -1,0 +1,265 @@
+---
+title: "RTK Cuts 80% of Your Token Waste — But Read the Fine Print Before You Install It"
+date: '2026-03-31'
+tags: ['claude', 'developer-tools', 'automation', 'dx', 'ai']
+draft: false
+summary: "RTK is a Rust CLI proxy that compresses command output before it hits Claude's context window — saving 60-90% of tokens on bash commands. Here's how it fits into a hooks-and-skills Claude Code setup, where it actually helps, and the security tradeoffs you should know about."
+---
+
+**TL;DR:** RTK intercepts bash commands via a PreToolUse hook and compresses their output before Claude sees it. Token savings are real (80%+ on git and test output) but apply only to Bash tool calls — Claude's built-in Read, Grep, and Glob tools bypass it entirely. Install is one command. Read the security section before you trust it with your monorepo.
+
+---
+
+You're running [Superpowers](/blog/superpowers-claude-code-workflow) with subagent-driven development. Each feature spawns 15+ subagents. Each subagent runs git commands, test suites, linters. A five-task plan means at least fifteen subagent invocations, each one running `git status`, `vitest`, `turbo run lint:ci`, `git commit` — and every byte of that output lands in someone's context window.
+
+A 30-minute session on a TypeScript monorepo can burn 150,000 tokens in bash output alone. Most of it is noise Claude doesn't need: 262 lines of "PASS" from your test runner, the full commit hash and author info from `git log`, progress bars from package installs. That noise costs real money on API billing, and worse, it pushes useful context out of the window faster.
+
+[RTK](https://github.com/rtk-ai/rtk) (Rust Token Killer) is an open-source CLI proxy that sits between Claude Code's bash commands and the actual CLI. It runs the real command, filters the output, and returns a compressed version. `git push` output goes from 15 lines to 1 line. `npm test` with 200 passing tests goes from 5,000 tokens to 50. The savings are real — but the story is more nuanced than the README suggests, especially if you already have a [hooks and permissions setup](/blog/hardening-claude-code-hooks-permissions-verification).
+
+## What RTK Is
+
+RTK is a single Rust binary (~4MB) that acts as a prefix proxy. `rtk git status` runs the real `git status` as a subprocess, captures stdout/stderr, applies language-aware compression, and prints a condensed version. Your shell, your tools, your PATH — all unchanged. RTK only touches output, never the commands themselves.
+
+- **15,000+ GitHub stars** in two months
+- **71 command modules** with specialized filters for git, npm, cargo, docker, kubectl, grep, and more
+- **5-15ms overhead** per command
+- **Fail-safe**: if filtering breaks, raw output is returned unchanged
+- **Apache-2.0 license**, very actively developed (v0.34.1 as of March 2026)
+
+The six-phase pipeline inside RTK: Parse → Route → Execute → Filter → Print → Track. That last phase writes metrics to a local SQLite database so you can see actual savings over time.
+
+## How It Works With Claude Code
+
+This is the part that matters for an existing hooks setup. RTK uses **PreToolUse** hooks — the same mechanism described in the [autonomous safety net post](/blog/autonomous-doesnt-mean-unsupervised-claude-code-safety-net), but for a different purpose.
+
+Here's the flow:
+
+```
+Claude decides to run "git status"
+  → PreToolUse hook fires
+  → rtk-rewrite.sh extracts the command via jq
+  → Calls "rtk rewrite" to generate the rewritten command
+  → Returns JSON: { updatedInput: { command: "rtk git status" }, permissionDecision: "allow" }
+  → Claude Code executes "rtk git status" instead
+  → RTK spawns real "git status", captures output
+  → Applies filtering (removes untracked noise, compresses paths)
+  → Claude sees only the compressed result
+```
+
+Claude never knows the rewrite happened. Every bash command goes through this, achieving 100% adoption with zero context token overhead from instructions.
+
+**The critical distinction**: RTK is a PreToolUse hook. Your [formatter and linter hooks](/blog/hardening-claude-code-hooks-permissions-verification) are PostToolUse hooks. These are different lifecycle events:
+
+1. Claude decides to run a command
+2. **PreToolUse** fires → RTK rewrites it
+3. Command executes → compressed output returned to Claude
+4. **PostToolUse** fires → Prettier formats, ESLint checks, schema nudge reminds
+
+No conflict. Your PostToolUse hooks run in their own shell context outside the Bash tool — they get full unfiltered output, which is exactly what you want for formatters and linters.
+
+## Installation
+
+```bash
+# Install RTK (pick one)
+brew install rtk
+# OR
+curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+
+# Configure for Claude Code (one command)
+rtk init -g
+
+# Restart Claude Code, then verify
+rtk init --show
+rtk gain
+```
+
+`rtk init -g` does three things:
+
+1. Installs `~/.claude/hooks/rtk-rewrite.sh` — the PreToolUse hook (~50 lines, requires `jq`)
+2. Creates `~/.claude/RTK.md` — minimal context instructions (~10 lines)
+3. Patches `~/.claude/settings.json` to register the hook
+
+To uninstall cleanly: `rtk init -g --uninstall`.
+
+**Gotcha**: There's a name collision on crates.io. `cargo install rtk` installs "Rust Type Kit" — a completely different project. If you use cargo, always specify `cargo install --git https://github.com/rtk-ai/rtk`.
+
+## Where RTK Fits in the Three-Layer System
+
+If you're running the [three-layer system](/blog/superpowers-claude-code-workflow) — skills for process discipline, hooks for operational guardrails, memory for cross-session knowledge — RTK is a fourth concern: **efficiency**. It doesn't replace any layer. It makes the bash operations underneath all three layers cheaper.
+
+| Layer | What it does | RTK's interaction |
+| --- | --- | --- |
+| **Skills** (Superpowers) | Brainstorming, TDD, subagent-driven dev | None — skills are markdown, not commands |
+| **Hooks** (PostToolUse) | Prettier, ESLint, schema nudge, package impact | Complementary — different lifecycle stage |
+| **Hooks** (PreToolUse) | Block generated files | RTK is also PreToolUse — check ordering |
+| **Memory** | Gotchas, verification matrix | None — memory is file-based context |
+
+**One thing to verify**: If you have a PreToolUse hook that blocks edits to generated files (like the `block-generated-files.sh` from the [safety net post](/blog/autonomous-doesnt-mean-unsupervised-claude-code-safety-net)), make sure it matches on the Bash tool's `Write|Edit` matcher, not the Bash command itself. RTK only rewrites Bash tool commands. File-editing hooks operate on different tool matchers and won't conflict.
+
+## Real Token Savings
+
+Here's what RTK's compression looks like on the commands you actually run in a Superpowers workflow:
+
+| Operation | Typical session freq | Standard tokens | RTK tokens | Savings |
+| --- | --- | --- | --- | --- |
+| `git status` / `diff` / `log` | 20x | 8,500 | 1,600 | -81% |
+| `git add` / `commit` / `push` | 8x | 1,600 | 120 | -92% |
+| `vitest` / `npm test` | 5x | 25,000 | 2,500 | -90% |
+| `ls` / `tree` | 10x | 2,000 | 400 | -80% |
+| `cat` / file reads | 20x | 40,000 | 12,000 | -70% |
+| `grep` / `rg` | 8x | 16,000 | 3,200 | -80% |
+
+Extreme case: `cargo test` with 262 passing tests compresses from 4,823 tokens to 11 tokens — 99% reduction. All those "PASS" lines are collapsed into a single summary line with the count.
+
+The creator's own 15-day usage data: 7,061 commands, 29.3M input tokens processed, 24.6M tokens saved (83.7% average).
+
+### The Honest Caveat
+
+Those numbers apply only to **Bash tool calls**. Claude Code's built-in tools — Read, Grep, Glob — bypass the Bash tool entirely. RTK can't intercept them because they never go through the PreToolUse hook.
+
+In a typical Claude Code session, only about 24% of total tokens flow through Bash commands. The rest goes through native tools. That means the net real-world token reduction across an entire session is closer to **~17%** — not 80%.
+
+For subagent-driven development specifically, the percentage is higher. Subagents run proportionally more bash commands — git operations for every commit, test runners after every implementation, build commands for verification. I'd estimate 30-40% net reduction in heavily-subagented sessions, which is where the savings actually matter most.
+
+Track your own numbers:
+
+```bash
+rtk gain              # Summary stats
+rtk gain --graph      # ASCII graph of savings over 30 days
+rtk discover          # Find commands RTK could optimize but isn't
+```
+
+## The Filtering in Detail
+
+RTK doesn't just truncate output. It applies language-aware strategies depending on the command:
+
+**Test runners** (vitest, pytest, cargo test, go test): Failure focus mode. All passing tests are collapsed into a count. Only failures get full output with context. This is the highest-value filter — test output is the single biggest token sink in TDD workflows.
+
+**Git operations**: Stats extraction. `git diff` becomes a summary of files changed and line counts instead of the full patch. `git log` strips author info, full hashes, and decoration. `git push` becomes "ok main" instead of 15 lines of remote info.
+
+**Build tools and linters**: Error grouping. Twenty-three `no-unused-vars` violations become `no-unused-vars: 23 violations` with one representative example instead of twenty-three separate blocks.
+
+**File listing and search**: Tree compression and deduplication. Large `ls` output gets aggregated by directory. Repeated grep matches get collapsed with counts.
+
+Four core strategies underpin everything: smart filtering (remove noise), grouping (aggregate similar items), truncation (keep relevant context), and deduplication (collapse repeated lines with counts). Twelve implementation-level techniques combine these strategies for different command families.
+
+## Configuration for a Monorepo
+
+Create `~/.config/rtk/config.toml`:
+
+```toml
+[telemetry]
+enabled = false
+
+[hooks]
+# Exclude commands where full output is critical for debugging
+exclude_commands = ["playwright", "curl"]
+
+[tee]
+enabled = true
+mode = "failures"    # Save full unfiltered output when commands fail
+max_files = 20       # Rotate saved files
+```
+
+The `tee` feature is important: when a command fails, RTK saves the complete unfiltered output to `~/.local/share/rtk/tee/`. If the compressed error output isn't enough for Claude to debug the issue, the full output is still recoverable without re-running the command.
+
+The `--ultra-compact` flag (`-u`) enables maximum compression — ASCII icons, inline format, no decoration:
+
+```bash
+rtk -u git status    # Even more compressed for long sessions
+```
+
+## Security Tradeoffs
+
+This is the section you should read carefully before installing RTK on a production monorepo.
+
+### The Trust Position
+
+RTK sits between Claude Code and every shell command. The PreToolUse hook auto-approves rewritten commands with `permissionDecision: "allow"`. This means RTK transitively expands what runs without user confirmation — every new command module RTK adds is another command that gets auto-approved through the hook.
+
+### Known Security Issues
+
+A [detailed security audit](https://github.com/rtk-ai/rtk/issues/640) found 16 vulnerabilities:
+
+**Critical**: Shell injection risk. Commands pass through `sh -c` in some RTK subcommands (`rtk err`, `rtk test`, `rtk summary`) without sanitization. Combined with the hook's auto-approve behavior, this creates a potential prompt-injection → shell-injection chain.
+
+**High**: Telemetry enabled by default with no install-time consent. It's anonymous (SHA-256 of hostname+username) and opt-out is available, but the default is on.
+
+**Medium**: Full command strings with arguments are persisted in SQLite for 90 days. If commands include tokens, passwords, or API keys as arguments, they're stored in plaintext on disk and could surface in LLM context via `rtk gain --history`.
+
+### Mitigations
+
+```toml
+# ~/.config/rtk/config.toml
+[telemetry]
+enabled = false
+```
+
+```bash
+# Pin to a specific version to prevent auto-updates introducing new attack surface
+brew pin rtk
+```
+
+**Check permission interaction**: Your existing deny rules (`git push --force`, `git reset --hard`) should still work because Claude Code evaluates permission rules on the _original_ command before the PreToolUse hook fires. But verify this in your setup — the hook was updated in v0.33.1 to respect Claude Code's native deny/ask permission rules on rewrite, but this is a recent change.
+
+### The Honest Assessment
+
+For a personal monorepo where you control the environment, the risk is manageable with telemetry disabled and version pinning. For a team with compliance requirements, read Issue #640 in full before deploying. The project is two months old with a rapid release cadence (22+ minor versions in 5 weeks) — it's moving fast, which means both quick fixes and potential instability.
+
+## The Over-Compression Problem
+
+This deserves its own section because it's the failure mode that costs the most time.
+
+[Issue #690](https://github.com/rtk-ai/rtk/issues/690) documents a case where Playwright E2E test output was stripped too aggressively — DOM snapshots, locator details, expected-vs-received diffs, retry traces all removed. The result: an agent spent **170 tool calls and ~3.6M tokens over 60 minutes** trying to debug a failure that would have taken 20 minutes with raw output. The compression was net negative.
+
+For a TypeScript monorepo running Vitest and Turborepo, watch for this with:
+
+- Complex test failure diffs where the expected-vs-received comparison matters
+- TypeScript compiler errors with multi-file dependency chains
+- Build errors deep in the Turbo task graph
+
+The tee feature helps — failed command output is saved to `~/.local/share/rtk/tee/`. But Claude doesn't automatically check it. If you notice Claude looping on a test failure, tell it to read the tee file directly.
+
+If a specific command consistently produces bad compressions, exclude it:
+
+```toml
+[hooks]
+exclude_commands = ["playwright", "your-problem-command"]
+```
+
+## Comparison With DIY Alternatives
+
+You don't strictly need RTK. The independent evaluation suggests simpler alternatives:
+
+**Custom PostToolUse truncation hook** (~15 lines of bash): Truncate all Bash tool output to a fixed token limit. Crude but zero trust surface.
+
+**Tighter CLAUDE.md instructions**: "Use `git log --oneline -10` instead of `git log`." "Use `git diff --stat` instead of `git diff`." Free, no binary dependency.
+
+**Native tool flags**: `--oneline`, `--stat`, `--short`, `--quiet` — many commands already have compact output modes.
+
+RTK's advantage over these is breadth (71 command modules with specialized filters) and transparency (you don't have to remember the compact flags — RTK applies them automatically). The disadvantage is the trust surface and the edge cases where compression hurts more than it helps.
+
+| Approach | Token savings | Trust surface | Maintenance | Edge case handling |
+| --- | --- | --- | --- | --- |
+| RTK | ~17% net, ~80% on bash | Binary + hook + auto-approve | Automatic updates | Tee + exclude list |
+| Custom truncation hook | ~10% net | Your own 15-line script | Manual | You control everything |
+| CLAUDE.md instructions | ~5% net | Zero | Manual, may drift | Claude may not follow |
+| Native flags | ~5% net | Zero | Zero | Per-command only |
+
+## Getting Started
+
+**5 minutes**: Install RTK, run `rtk init -g`, restart Claude Code. Run a normal session.
+
+**After first session**: Run `rtk gain` to see actual savings. Run `rtk discover` to see what it missed. Check if any commands produced suspiciously short output that Claude struggled with.
+
+**First week**: Monitor for over-compression on test failures. If you hit issues, add problem commands to `exclude_commands` in config.toml. Check `~/.local/share/rtk/tee/` to verify failed command output is being preserved.
+
+**Ongoing**: `rtk gain --graph` shows a 30-day trend. As your subagent-driven sessions get longer and your plan sizes grow, the savings compound. A five-task plan saves more than a two-task plan because the ratio of bash commands to file reads increases with plan complexity.
+
+---
+
+RTK is the token equivalent of what your Prettier hook does for formatting — it removes noise mechanically so the context window budget isn't wasted on it. It doesn't replace any layer of the [three-layer system](/blog/superpowers-claude-code-workflow). It's an efficiency optimization that sits underneath all of them, making each layer's bash operations cheaper.
+
+The real question isn't whether RTK saves tokens — it does, substantially, on the commands it intercepts. The question is whether the trust surface is acceptable for your environment. For a personal project where you control the stack, pinning the version and disabling telemetry gets you most of the upside with manageable risk. For anything with compliance requirements, wait for the security audit responses to land and the project to stabilize past its rapid-release phase.
+
+[RTK on GitHub](https://github.com/rtk-ai/rtk) | [RTK documentation](https://www.rtk-ai.app)
