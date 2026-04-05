@@ -121,6 +121,8 @@ Plan mode lets Claude read and think without editing. Use it to produce a plan f
 
 `cat large.log` sends 500k tokens into context. `grep ERROR large.log | tail -50` sends 2k. Teach yourself to filter at the shell before the output ever reaches Claude. Same principle for `gh pr view` (verbose by default), `kubectl logs`, `docker logs` — always filter first.
 
+If you want to automate this, [RTK](/blog/rtk-token-compression-claude-code-honest-look) is a PreToolUse hook that compresses bash output before Claude sees it — 80%+ savings on git and test output without changing how you prompt. It's the tooled version of this same principle.
+
 ### 19. Git worktrees for isolated agent tasks
 
 Instead of running 3 parallel Claude sessions in the same repo (all re-reading the same files into three separate contexts), use `git worktree add` to give each session its own checkout. Smaller effective working sets, cleaner context, easier cleanup.
