@@ -1,0 +1,184 @@
+---
+title: The Claude Code Token Economy — How Disciplined Users Spend 10x Less
+date: '2026-04-05'
+tags: ['claude-code', 'productivity', 'optimization', 'workflow', 'cost']
+draft: false
+summary: A practical field guide to cutting Claude Code token usage by 3-10x without losing capability. Model selection, subagents, hooks, CLAUDE.md hygiene, and the honest floor of what's actually possible.
+---
+
+People who really know what they're doing can run Claude Code for a full working day on **well under 1M tokens** — sometimes 200-500k — where a naive user burns through 5-10M+ on the same work. Claude Max Pro ($100/mo) gives roughly 200-800 Sonnet prompts per 5-hour window. Disciplined users rarely hit the cap. Beginners hit it in an hour.
+
+You'll see claims on Instagram and Twitter like "I coded all day on 50k tokens." They're usually plausible but leave out context. Here's what actually moves the needle, in rough order of impact.
+
+## The Big Levers (80% of savings)
+
+### 1. Pick the right model for the job
+
+This is the single biggest factor. Most people leave it on one model and never touch `/model`.
+
+- **Haiku 4.5** for: file renames, formatting, simple edits, boilerplate, running commands, "what does this file do" questions. It's ~1/12th the cost of Opus and fast.
+- **Sonnet 4.6** for: normal coding, refactors, debugging, most day-to-day work. The default sweet spot.
+- **Opus 4.6** only for: architecture decisions, gnarly bugs, multi-file reasoning, security review. People who live in Opus burn 5x more tokens than they need to.
+
+`/model` switches on demand. Power users flip models multiple times per session — Opus to plan, Sonnet to implement, Haiku to clean up.
+
+### 2. Use the right tool, not the agent, for lookups
+
+Every message to Claude reloads your whole context. If you just need to find a file or read a line:
+
+- `Glob`/`Grep` directly instead of "find me the file that…"
+- `Read` with `offset`/`limit` instead of reading whole files
+- Don't spawn an Explore subagent for a one-file question
+
+A targeted `Grep` costs a few hundred tokens. "Can you look around and find where auth is handled?" costs tens of thousands.
+
+### 3. Subagents for anything research-heavy
+
+Counterintuitive but huge: delegating a big search to an Explore subagent costs tokens *once*, and only the summary comes back to your main context. Doing the same search in your main thread pollutes context for the rest of the session, and every subsequent message re-sends all that noise.
+
+The rule of thumb: if the answer is going to require reading 5+ files, delegate to a subagent. If it's 1-2 files, do it inline.
+
+### 4. Compact or `/clear` aggressively
+
+Start a new session for each unrelated task. Long sessions accumulate context you no longer need. `/clear` between tasks is free and drops your per-turn cost back to baseline. `/compact` preserves key state while shedding the noise.
+
+The mistake beginners make is treating a session like a long conversation. Treat it like a task container instead: one task, one session, clear.
+
+## Medium Levers
+
+### 5. A tight CLAUDE.md
+
+Put project conventions, key file paths, and "don't read these directories" rules at the top. Saves Claude from re-discovering the same structure every session. But keep it short — CLAUDE.md is loaded on every turn, so bloat here is the opposite of savings. A 200-line CLAUDE.md that ships on every request is worse than a 40-line one that points at docs Claude can load on demand.
+
+### 6. Use slash commands and skills for repeated workflows
+
+A `/commit` skill replaces a 500-token explanation of "how I like my commit messages." Writing 5-10 personal skills pays for itself in a week. Skills are only loaded when invoked, so they don't bloat your baseline context.
+
+### 7. Hooks for automated checks
+
+Instead of asking Claude "did you run the linter?", a `PostToolUse` hook runs it automatically. No tokens spent on enforcement. Hooks are executed by the Claude Code harness, not the model, so they're essentially free.
+
+Good hook candidates:
+- Auto-format on file write
+- Run tests after edits to `src/`
+- Block writes to `.env` or secrets files
+- Log token usage to a local file
+
+### 8. Precise prompts with file paths and line numbers
+
+"Fix the auth bug in `src/auth/login.ts:47`" costs ~20 tokens and zero exploration. "Fix the login bug" costs a full file hunt — often 10-50k tokens of reading files before any work happens.
+
+This is the single biggest behavior change available to you, and it's free. Before you send a prompt, ask: do I already know where the change needs to go? If yes, say so.
+
+### 9. Don't let Claude read what it doesn't need
+
+Add a `.claudeignore` or explicit exclusions for `node_modules`, `dist`, `*.min.js`, lock files, generated code, build artifacts. People with 10-20MB of junk in their repo and no exclusions bleed tokens on every `Grep`.
+
+## Small but Real
+
+### 10. Stop the agent early when it's going sideways
+
+If Claude starts exploring the wrong direction, hit escape and redirect immediately. Letting it run for 5 more tool calls "just in case" is how budgets die.
+
+### 11. Prefer Edit over Write
+
+Edit sends only the diff; Write sends the whole file. On a 500-line file this is a 10x difference. Only use Write for genuinely new files or complete rewrites.
+
+### 12. Turn off verbose thinking for simple tasks
+
+Extended thinking is great for hard problems and wasteful for "rename this variable." Reserve it for architecture and debugging.
+
+### 13. Use `--resume` instead of re-explaining
+
+Picking up a prior session costs nothing extra; re-briefing a fresh session on the same problem costs thousands of tokens.
+
+## The Second Tier Nobody Talks About
+
+Beyond the standard advice, here are optimizations I see almost no one mention.
+
+### 14. Batch parallel tool calls in one message
+
+When you need multiple independent reads (git status + git diff + git log), send them as a single message with multiple tool uses rather than three turns. Each turn has fixed overhead — the system prompt, CLAUDE.md, and current context all re-serialize. Batching cuts that overhead proportionally.
+
+### 15. Prompt caching is your friend — don't fight it
+
+Claude Code caches the stable prefix of your conversation (system prompt + CLAUDE.md + early turns). Cached tokens cost ~10% of fresh tokens. Two behaviors that break caching:
+
+- Editing CLAUDE.md mid-session (cache invalidated)
+- Very long gaps between messages (cache expires after ~5 minutes)
+
+If you're iterating fast on the same task, you're getting massive cache discounts you're probably not aware of. If you're constantly swapping projects or editing CLAUDE.md, you're paying fresh rates every time.
+
+### 16. Audit your MCP servers
+
+Every MCP server you add loads its tool schemas into every request, whether you use them or not. A repo with 8 MCP servers registered can easily have 20-40k tokens of tool descriptions baked into every single turn. Run `claude mcp list`, remove anything you don't actively use, and scope the rest per-project.
+
+### 17. Use Plan Mode before expensive work
+
+Plan mode lets Claude read and think without editing. Use it to produce a plan for a complex task, review it, then execute. This front-loads the reading cost once rather than having Claude re-read files during a chaotic implementation phase where it's also writing code.
+
+### 18. Pipe and filter terminal output
+
+`cat large.log` sends 500k tokens into context. `grep ERROR large.log | tail -50` sends 2k. Teach yourself to filter at the shell before the output ever reaches Claude. Same principle for `gh pr view` (verbose by default), `kubectl logs`, `docker logs` — always filter first.
+
+### 19. Git worktrees for isolated agent tasks
+
+Instead of running 3 parallel Claude sessions in the same repo (all re-reading the same files into three separate contexts), use `git worktree add` to give each session its own checkout. Smaller effective working sets, cleaner context, easier cleanup.
+
+### 20. One-shot mode for scriptable tasks
+
+`claude -p "summarize this PR"` runs a single prompt without an interactive session. No accumulated history, no conversational overhead. Perfect for CI, cron jobs, and repeatable transforms. If you catch yourself doing the same thing twice in interactive mode, it probably belongs in one-shot mode.
+
+### 21. Monitor with `/cost` in-session
+
+`/cost` shows your current session's token spend. Run it every 20 minutes. You'll quickly learn which of your habits are expensive and which aren't. Awareness alone changes behavior.
+
+### 22. Statusline that shows live token usage
+
+Configure your statusline to display current session tokens. It's a constant nudge toward discipline without being intrusive. Claude Code's `update-config` workflow can set this up in a minute.
+
+### 23. Don't attach whole files when a snippet will do
+
+Pasting a 2000-line file into a chat because you have "a question about line 40" is a classic waste. Copy the relevant 20 lines. Or better, reference the path and line numbers and let Claude `Read` only what it needs with `offset`/`limit`.
+
+### 24. Skip the "are you sure?" roundtrip
+
+Give full instructions upfront instead of "can you refactor this? ok now also add tests. ok now also update the docs." Each turn re-sends everything. Bundle requirements into the first message.
+
+## The Honest Floor
+
+If you're doing real engineering work — reading files, running tests, debugging — you cannot get below roughly **50-150k tokens per focused hour** without cheating. Claims of "I coded all day on 50k tokens" usually mean one of:
+
+- They were mostly using Haiku
+- Most of their "work" was planning, not execution
+- They had a heavily pre-built skill/command library doing the lifting
+- They're measuring input tokens only, not cached + output
+- They're counting a day of thinking that included 90 minutes of actual agent time
+
+That's fine — those are all legitimate strategies. But don't benchmark yourself against a number that's measuring something different than what you're doing.
+
+## A Realistic Target Ladder
+
+Rough numbers for someone working a full day on normal coding tasks:
+
+- **Naive usage:** 5-10M tokens/day. One model, long sessions, "figure it out" prompts.
+- **Basic discipline:** 1.5-3M tokens/day. Model switching, `/clear` between tasks, decent CLAUDE.md. Most people land here after a week.
+- **Practiced:** 500k-1.5M tokens/day. Subagents, skills, hooks, precise prompts, prompt caching awareness.
+- **Expert:** 200-500k tokens/day. All of the above plus heavy scripting, one-shot mode for repeatable work, aggressive context hygiene.
+- **Below 200k:** You're either not doing much agentic work, or you've built enough skills and automation that Claude is mostly executing pre-canned workflows.
+
+There's no prize for the lowest number. The goal is *capability per token*, not minimum tokens. A developer shipping three features a day on 2M tokens is winning over one shipping zero features on 100k.
+
+## What to Do This Week
+
+If you're starting from scratch, do these five things in order. Each one is 15 minutes of work for significant savings.
+
+1. **Add a `.claudeignore`** to every repo you use Claude Code in. Exclude `node_modules`, `dist`, `.next`, `build`, `*.lock`, and any generated directories.
+2. **Trim your CLAUDE.md** to under 60 lines. Move the rest into separate docs that get loaded on demand.
+3. **Audit your MCP servers.** Remove any you don't use weekly.
+4. **Write two personal skills** for your most repeated workflows (commit messages, PR descriptions, new-file scaffolding).
+5. **Default to Sonnet, know when to drop to Haiku,** and stop reaching for Opus except when you actually need it.
+
+Do that and you'll probably cut your usage 3-5x from a naive baseline without feeling any loss of capability. Getting to the "barely any tokens" Instagram level beyond that is mostly about doing less *agentic* work and more *directed* work — telling Claude exactly what to change instead of asking it to figure things out.
+
+The discipline you build cutting tokens is the same discipline that makes you a better engineer: knowing what you want before you start, writing precise specs, and not letting tools wander. The savings are a nice side effect.
