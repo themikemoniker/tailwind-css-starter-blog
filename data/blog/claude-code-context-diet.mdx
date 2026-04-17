@@ -1,0 +1,213 @@
+---
+title: Put Your Claude Code Setup on a Context Diet
+date: '2026-04-17'
+tags: ['claude-code', 'optimization', 'mcp', 'workflow', 'configuration']
+draft: false
+summary: A 30-minute audit that cut my Claude Code setup from 9 plugins and 150+ tool definitions to 3 plugins and a much leaner context — plus the CLAUDE.md, allowlist, and memory cleanup that went with it.
+---
+
+I just spent an evening auditing my Claude Code configuration. Not because anything was broken — sessions were fine, completions were decent, the vibes were acceptable. I did it because I had a nagging suspicion I was wasting context on things that didn't matter, and it turns out I was right by a wide margin.
+
+Here's what I found and what I changed.
+
+## The Problem: Death by a Thousand Tool Definitions
+
+I had 9 plugins enabled globally and 4 MCP servers configured. That sounds reasonable until you count what it actually loads into every session.
+
+| Source | Tool Definitions |
+|---|---|
+| BetterStack MCP | ~70 |
+| GitHub MCP | ~30 |
+| Linear MCP | ~25 |
+| Other MCP servers | ~25 |
+| **Total** | **~150+** |
+
+Claude Code does have a "deferred loading" feature — tools from MCP servers are listed by name only and their full schemas are fetched on demand. But even deferred tools inject every tool name into a system reminder each session, and many plugins register tools without deferred loading at all, dumping full JSON schemas, parameter descriptions, and usage instructions into context upfront. Either way, Claude has to scan the full list to decide which tool to use for any given task.
+
+The kicker: I was actively using maybe 10-15 of those 150+ tools in any given week. The rest were just adding noise to tool selection and contributing nothing.
+
+Most developers install an MCP plugin, confirm it works, and never think about it again. I was one of them. The default experience is fine. But if you're pushing into longer sessions, complex multi-file refactors, or agentic workflows where context headroom matters, this overhead adds up.
+
+## The Fix: CLI Over MCP (When Possible)
+
+This was the single biggest win. The GitHub MCP plugin registered 30+ tool definitions covering repos, issues, PRs, checks, releases, and more. Meanwhile, `gh` — GitHub's official CLI — does all of that through the Bash tool, which is *already loaded*. Zero additional tool definitions in context — you only pay for the actual command output when Claude runs it.
+
+The rule of thumb I landed on: **if a mature CLI exists, use it instead of the MCP equivalent.**
+
+- `gh` replaces GitHub MCP
+- `aws` replaces AWS MCP
+- `docker` replaces Docker MCP
+- `curl` + a skill file replaces Linear MCP (more on this below)
+
+So when *is* MCP worth it? When the tool needs capabilities that a CLI can't provide:
+
+- **Playwright** — browser control, screenshots, DOM interaction. No CLI equivalent.
+- **LSP servers** — real-time type checking, go-to-definition, diagnostics. You need a persistent connection.
+- **Superpowers** — structured thinking workflows that benefit from dedicated skill definitions.
+
+I kept those three. Everything else got replaced with CLI equivalents or cut entirely.
+
+### Replacing MCP with Skills
+
+Linear was an interesting case. I used it frequently enough that I didn't want to lose the integration, but 25 tool definitions for an issue tracker felt excessive. The fix: a skill file that wraps Linear's GraphQL API with `curl`.
+
+Now instead of 25 tool definitions loaded every session, I have zero — until I type `/linear`, at which point Claude gets the exact context it needs for that specific task. Skills are loaded on demand when invoked. MCP tools register themselves at session start whether you need them or not.
+
+## CLAUDE.md Hygiene
+
+My `CLAUDE.md` had grown organically over a few months. It was importing a 200-line changelog from another file via `@CHANGELOG.md`. Every session started by reading a detailed history of changes that Claude would never need to reference.
+
+I also had sections documenting the project's file structure, package descriptions, and architecture overview. All of it derivable. Claude can read a `package.json`, scan a directory tree, or examine imports to figure out how the code is organized. Documenting it in `CLAUDE.md` wastes tokens on information Claude could get on demand by reading the code.
+
+What I kept in `CLAUDE.md` (now under 200 lines):
+
+- **Security rules** — "never commit `.env` files," "always use parameterized queries"
+- **Non-obvious conventions** — "we use barrel exports in `src/index.ts`," "test files live next to source, not in `__tests__`"
+- **Gotchas** — "the `deploy` script requires VPN access," "don't run migrations without `--dry-run` first"
+- **Commands with non-obvious flags** — the exact incantation for the project's lint/test/build pipeline
+
+What I removed:
+
+- Architecture overview (read the code)
+- File listings (use `ls`)
+- Package descriptions (read `package.json`)
+- Changelog imports (irrelevant to current tasks)
+- Multi-step workflow documentation (moved to skills)
+
+If Claude can derive it from the codebase by reading a file, it probably doesn't belong in `CLAUDE.md`. The exception is things referenced so frequently that the on-demand tool call cost would exceed the upfront context cost — but that list is shorter than you think.
+
+## Allowlist Hygiene
+
+This one surprised me. Claude Code saves one-off tool approvals as permanent allow rules in `settings.json`. Every time you hit "allow" on a prompt, it creates a new rule. They accumulate silently.
+
+I had **105 allow rules**. After auditing them:
+
+- 19 separate rules for variations of `git status`, `git log`, `git diff`, `git branch`, etc.
+- Multiple rules with hardcoded absolute paths to files that no longer existed
+- Dead references to MCP tools from plugins I'd already uninstalled
+- **Rules with embedded credentials** — database passwords and API tokens baked into command patterns, permanently visible in a plain-text JSON file. This is a genuine security issue, not just clutter.
+
+The fix was consolidation and cleanup. Those 19 git rules became:
+
+```json
+{ "allow": "Bash(git *)" }
+```
+
+Paired with explicit deny rules for the dangerous stuff:
+
+```json
+{ "deny": "Bash(git push --force*)" },
+{ "deny": "Bash(git reset --hard*)" },
+{ "deny": "Bash(git clean -f*)" }
+```
+
+105 rules down to **27 intentional ones**. Less for Claude to scan, fewer stale references, and the deny rules actually make the setup safer than before.
+
+## Memory Deduplication
+
+Claude Code's memory system (`CLAUDE.md` + memory files) can accumulate duplicate content over time. I found several cases where the memory had stored architecture notes, domain model descriptions, and API documentation that were either already in `CLAUDE.md` or trivially derivable from the code.
+
+The principle is simple: **memory should store things not derivable from code or `CLAUDE.md`.**
+
+Good memory entries:
+
+- "Jordan prefers explicit error types over string errors"
+- "We decided to use ULIDs instead of UUIDs because of sortability — see Slack thread from March"
+- "The billing service has a 30-second timeout that isn't documented anywhere"
+
+Bad memory entries:
+
+- "The project uses React 18 with TypeScript" (read `package.json`)
+- "The API has endpoints for users, projects, and tasks" (read the routes)
+- "The database schema has a `users` table with columns..." (read the migrations)
+
+I cleared out the duplicated content and the memory became actually useful — a place for context that would otherwise be lost.
+
+## Plugin Overlap
+
+I had both `superpowers` and `feature-dev` enabled. Both provide code review skills. Both offer architecture and planning workflows. Having both meant duplicate skill definitions competing for invocation, and Claude occasionally picking the less appropriate one.
+
+Pick one system and disable the other. Every disabled plugin means fewer tool definitions and fewer skills competing for invocation.
+
+## Global vs Project Scope
+
+Not everything belongs in your global config. I had project-specific plugins enabled globally, which meant every project paid the context cost for tools only one project needed.
+
+The split that makes sense:
+
+| Scope | What Goes Here |
+|---|---|
+| **Global** | Deny rules, notification hooks, general-purpose plugins (superpowers), CLI proxy (RTK) |
+| **Project** | Project-specific MCP servers, skills for that project's APIs, commands for that project's workflow |
+
+Project-specific skills (like a GraphQL mutation guide for your API) live in that project's `.claude/commands/` directory, not in your global config.
+
+## CLI Output: The Other Half of the Diet
+
+Context diet isn't just about what loads at session start — it's also about what comes back from tool calls. A single `git log` can dump hundreds of lines. A `cargo build` error might include 50 lines of backtrace you don't need.
+
+I use [RTK (Rust Token Killer)](https://github.com/rtk-ai/rtk) as a CLI proxy that filters and compresses command output before it hits Claude's context. Its self-reported analytics (`rtk gain`) show **53% savings on CLI output tokens** across 900+ commands in my setup — your mileage will vary depending on which commands you run most. It's transparent — a hook rewrites `git status` to `rtk git status` automatically — so there's zero friction.
+
+This is orthogonal to the MCP/plugin optimization but equally impactful. You can have a perfectly minimal plugin setup and still blow your context budget on verbose build output.
+
+## The Workflow That Actually Works
+
+After all this cleanup, here's what adding a feature actually looks like from my side. The key insight is that with a workflow plugin like superpowers, **you don't manually orchestrate the steps**. The plugin instructs Claude to check for applicable skills before every response — so when you describe a feature, Claude recognizes that brainstorming applies. When you approve a direction, it recognizes that planning applies. You're not memorizing slash commands; the discipline is encoded in the system.
+
+```
+Me:  "Add a referral rewards system where users earn credits
+      for inviting friends who sign up"
+
+     Claude loads brainstorming skill → asks clarifying questions
+     about scope, edge cases, existing patterns
+
+Me:  "Yes, use the existing credits system, cap at 10 referrals
+      per user, expire unused codes after 30 days"
+
+     Claude loads planning skill → produces a numbered
+     implementation plan with files to modify
+
+Me:  "Looks good, go ahead"
+
+     Claude loads TDD skill → writes failing tests first,
+     then implements. Hooks fire automatically on every edit:
+     prettier formats, eslint checks, schema-nudge reminds
+     about GraphQL regeneration.
+
+     Before claiming done, verification skill kicks in →
+     runs the full test suite and shows real output.
+
+Me:  "Create a PR"
+
+     Claude uses `gh pr create` (CLI, not MCP).
+```
+
+Four messages from me. The plugin handles the engineering discipline. I focus on product decisions.
+
+### The Habits That Make This Work
+
+The workflow plugin handles the coding discipline, but these habits are on you:
+
+- **`/clear` between unrelated tasks** — don't let a debugging session's context pollute a feature implementation. This is the single highest-ROI habit.
+- **`/compact focus on X` when sessions get long** — tell Claude what to preserve when context gets compressed.
+- **Parallel agents for investigation** — spawn sub-agents to explore multiple parts of the codebase simultaneously instead of sequential exploration that eats your main context.
+- **Let hooks do the boring stuff** — auto-formatting, linting, generated file protection, and "did you forget to regenerate the schema?" nudges all happen without you thinking about them.
+
+## Audit Checklist
+
+Run this against your own setup. It takes 15 minutes.
+
+- [ ] **Count your MCP tool definitions.** Run `claude mcp list` and check each server. Ask yourself: am I using most of these tools, or just a few?
+- [ ] **For each MCP server, ask: does a CLI exist?** If yes, uninstall the MCP server and use the CLI.
+- [ ] **Count your plugins.** Disable any you haven't consciously used in the last week.
+- [ ] **Check for plugin overlap.** Two plugins providing similar skills = wasted context.
+- [ ] **Read your `CLAUDE.md`.** Remove anything Claude can derive from reading the code. Target under 200 lines.
+- [ ] **Check for file imports in `CLAUDE.md`.** Every `@import` loads that entire file every session. Is it worth it?
+- [ ] **Count your allowlist rules.** `grep -c allow ~/.claude/settings.json`. Consolidate with wildcards, add deny rules for dangerous operations. Check for embedded credentials.
+- [ ] **Review your memory entries.** Remove duplicates of `CLAUDE.md` content and anything derivable from code.
+- [ ] **Separate global vs project config.** Move project-specific plugins, skills, and commands to project scope.
+- [ ] **Check your CLI output costs.** If you're not filtering build/test/log output, look into a proxy like RTK.
+
+The default Claude Code setup is fine for most work. But if you're doing long sessions, complex refactors, or agentic workflows where every token of context counts, a 30-minute audit can make a real difference. I went from 9 plugins and 4 MCP servers to 3 plugins and 1 MCP server, from 105 allow rules to 27, and from a 450-line CLAUDE.md to under 200. Tool selection is more precise, sessions last longer before degrading, and I'm no longer paying for tools I never use.
+
+That nagging suspicion was worth investigating.
